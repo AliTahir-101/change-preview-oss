@@ -74,6 +74,12 @@
   let saveInterceptEnabled = true;
   let modalOpen = false;
   let pendingSaveTarget = null;
+  
+  /**
+   * Flag to suppress notifications immediately after baseline clear.
+   * Prevents phantom dirty rows from racing with the clear operation.
+   */
+  let suppressNotify = false;
 
   function shouldSkipField(el) {
     if (SKIP_TYPES.has(el.type)) return true;
@@ -658,7 +664,21 @@
     return fields;
   }
 
-  function snapshotBaseline() {
+  /**
+   * Captures current form field values as the baseline for dirty detection.
+   * 
+   * @param {boolean} silent - If true, skip notifying panel (used after Clear
+   *   to prevent phantom dirty rows from racing with the clear operation).
+   * 
+   * Clear → Baseline order:
+   * 1. Panel sends CLEAR_BASELINE
+   * 2. Content script clears baseline map
+   * 3. Content script captures ALL current field values as new baseline
+   * 4. Since baseline === current, getDirtyFields() returns empty array
+   * 5. In silent mode, we skip notifyPanel to avoid any race conditions
+   * 6. Panel will query GET_FIELDS when ready and get clean state
+   */
+  function snapshotBaseline(silent = false) {
     baseline.clear();
     const fields = collectFields();
     for (const field of fields) {
@@ -670,9 +690,29 @@
       });
     }
     updateBadge();
-    notifyPanel();
+    if (!silent && !suppressNotify) {
+      notifyPanel();
+    }
   }
 
+  /**
+   * Values that represent "empty" or "default" state.
+   * Changes between these are not meaningful and should be filtered out.
+   */
+  const EMPTY_VALUES = new Set([
+    '', '(none)', '(none selected)', '(unchecked)', 'Unchecked', '(empty)',
+    undefined, null
+  ]);
+  
+  function isEmptyValue(val) {
+    if (val === undefined || val === null) return true;
+    if (typeof val === 'string') {
+      const trimmed = val.trim();
+      return trimmed === '' || EMPTY_VALUES.has(trimmed);
+    }
+    return false;
+  }
+  
   function getDirtyFields() {
     const currentFields = collectFields();
     const dirty = [];
@@ -680,14 +720,24 @@
     for (const field of currentFields) {
       const original = baseline.get(field.key);
       if (!original) {
-        dirty.push({
-          key: field.key,
-          label: field.label,
-          type: field.type,
-          was: '(new field)',
-          now: field.value
-        });
+        // New field appeared - only count if it has a meaningful value
+        if (!isEmptyValue(field.value)) {
+          dirty.push({
+            key: field.key,
+            label: field.label,
+            type: field.type,
+            was: '(new field)',
+            now: field.value
+          });
+        }
       } else if (original.value !== field.value) {
+        // Value changed - filter out empty↔empty noise
+        const wasEmpty = isEmptyValue(original.value);
+        const nowEmpty = isEmptyValue(field.value);
+        
+        // Skip if both are empty variants (e.g., "" vs "(none)")
+        if (wasEmpty && nowEmpty) continue;
+        
         dirty.push({
           key: field.key,
           label: field.label,
@@ -712,6 +762,9 @@
   }
 
   function notifyPanel() {
+    // After Clear, suppress notifications to prevent phantom dirty rows
+    if (suppressNotify) return;
+    
     const dirty = getDirtyFields();
     chrome.runtime.sendMessage({
       type: 'FIELDS_UPDATE',
@@ -1226,8 +1279,19 @@
         break;
         
       case 'CLEAR_BASELINE':
-        snapshotBaseline();
-        sendResponse({ success: true });
+        /**
+         * Clear detections: re-establish baseline from current live form values.
+         * Use silent=true to prevent notifyPanel from sending updates that could
+         * race with the panel's clear operation and cause phantom dirty rows.
+         * The panel will explicitly query GET_FIELDS when it's ready.
+         */
+        suppressNotify = true;
+        snapshotBaseline(true);
+        
+        // Allow notifications again after a brief delay
+        setTimeout(() => { suppressNotify = false; }, 500);
+        
+        sendResponse({ success: true, baselineSize: baseline.size });
         break;
         
       case 'SET_INTERCEPT':

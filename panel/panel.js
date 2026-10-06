@@ -581,6 +581,19 @@ async function savePersistSetting(enabled) {
   }
 }
 
+/**
+ * Clear detections for the current form.
+ * 
+ * Order of operations (critical for preventing phantom rows):
+ * 1. Set justCleared flag to block any incoming FIELDS_UPDATE messages
+ * 2. Clear persisted storage for this form (fingerprint + host/path fallbacks)
+ * 3. Tell content script to CLEAR_BASELINE (re-snapshot current values as baseline)
+ * 4. Reset all panel state flags
+ * 5. Update UI to show 0 changes immediately
+ * 6. Keep justCleared true long enough to block periodic refreshData and stale messages
+ * 
+ * After clear, the list stays empty until the user actually edits fields again.
+ */
 async function clearDetections() {
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -596,28 +609,42 @@ async function clearDetections() {
       } catch {}
     }
     
+    // Block all updates during and after clear to prevent phantom rows
     justCleared = true;
     
+    // Clear storage for this form
     await clearPersistedDetections(host, path);
-    await chrome.tabs.sendMessage(tab.id, { type: 'CLEAR_BASELINE' });
     
+    // Tell content script to re-baseline from current live values
+    const response = await chrome.tabs.sendMessage(tab.id, { type: 'CLEAR_BASELINE' });
+    
+    // Reset all panel state
     isShowingRestoredData = false;
     formLooksReset = false;
     persistedData = null;
     currentData = null;
     currentFingerprint = null;
     
+    // Update UI to show empty state immediately
+    const coverage = response?.baselineSize 
+      ? { tracked: response.baselineSize, total: response.baselineSize, skipped: 0 }
+      : { tracked: 0, total: 0, skipped: 0 };
+    
     updateUI({
       host: host || '—',
       path: path || '',
       dirty: [],
-      coverage: { tracked: 0, total: 0, skipped: 0 }
+      coverage: coverage
     });
     updateReapplyVisibility();
     
     showToast('Detections cleared');
     
-    setTimeout(() => { justCleared = false; }, 500);
+    // Keep justCleared true long enough to block:
+    // - Stale FIELDS_UPDATE messages from content script
+    // - The periodic refreshData interval (2000ms)
+    // - Any MutationObserver-triggered updates
+    setTimeout(() => { justCleared = false; }, 2500);
   } catch (err) {
     console.error('Failed to clear detections:', err);
     showToast('Failed to clear');
@@ -725,6 +752,11 @@ elements.reapplyChanges.addEventListener('click', reapplyChanges);
 
 chrome.runtime.onMessage.addListener((message) => {
   if (message.type === 'FIELDS_UPDATE') {
+    // After Clear, ignore incoming updates to prevent phantom rows from racing
+    if (justCleared) {
+      return;
+    }
+    
     const data = message.data;
     const fieldKeys = (data.dirty || []).map(f => f.key);
     const allFieldKeys = data.allFieldKeys || fieldKeys;
