@@ -37,6 +37,7 @@ let currentFingerprint = null;
 let persistedData = null;
 let isShowingRestoredData = false;
 let formLooksReset = false;
+let justCleared = false;
 
 const TYPE_LABELS = {
   'text': 'Text',
@@ -327,6 +328,10 @@ async function copyToClipboard(text, format) {
 }
 
 async function refreshData() {
+  if (justCleared) {
+    return;
+  }
+  
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab?.id) return;
@@ -335,29 +340,30 @@ async function refreshData() {
     if (response) {
       const fieldKeys = (response.dirty || []).map(f => f.key);
       const allFieldKeys = response.allFieldKeys || fieldKeys;
-      currentFingerprint = createFingerprint(response.host, response.path, allFieldKeys);
+      const newFingerprint = createFingerprint(response.host, response.path, allFieldKeys);
       
       const liveHasChanges = response.dirty?.length > 0;
       
       if (persistEnabled && liveHasChanges) {
+        currentFingerprint = newFingerprint;
         await saveDetections(response, currentFingerprint);
-        persistedData = { dirty: response.dirty };
+        persistedData = { dirty: response.dirty, fingerprint: currentFingerprint };
         isShowingRestoredData = false;
         formLooksReset = false;
       }
       
-      if (persistEnabled && !liveHasChanges) {
-        let persisted = await loadPersistedDetections(currentFingerprint);
+      if (persistEnabled && !liveHasChanges && !justCleared) {
+        let persisted = await loadPersistedDetections(newFingerprint);
         if (!persisted) {
           const fallback = await loadPersistedByHostPath(response.host, response.path);
           if (fallback?.data) {
             persisted = fallback.data;
-            currentFingerprint = fallback.data.fingerprint;
           }
         }
         
         if (persisted?.dirty?.length > 0) {
           persistedData = persisted;
+          currentFingerprint = persisted.fingerprint || newFingerprint;
           isShowingRestoredData = true;
           formLooksReset = true;
           
@@ -373,6 +379,7 @@ async function refreshData() {
         }
       }
       
+      currentFingerprint = newFingerprint;
       isShowingRestoredData = false;
       formLooksReset = false;
       updateUI(response);
@@ -380,6 +387,8 @@ async function refreshData() {
     }
   } catch (err) {
     console.error('Failed to get fields:', err);
+    
+    if (justCleared) return;
     
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (tab?.url && persistEnabled) {
@@ -506,12 +515,32 @@ async function saveDetections(data, fingerprint) {
   }
 }
 
-async function clearPersistedDetections() {
-  if (!currentFingerprint) return;
+async function clearPersistedDetections(host, path) {
   try {
-    const key = getStorageKey(currentFingerprint);
-    await chrome.storage.local.remove(key);
+    const keysToRemove = [];
+    
+    if (currentFingerprint) {
+      keysToRemove.push(getStorageKey(currentFingerprint));
+    }
+    
+    if (host) {
+      const normalizedPath = (path || '/').replace(/\/+$/, '') || '/';
+      const prefix = STORAGE_PREFIX + host + normalizedPath;
+      const all = await chrome.storage.local.get(null);
+      
+      for (const key of Object.keys(all)) {
+        if (key.startsWith(prefix) && !keysToRemove.includes(key)) {
+          keysToRemove.push(key);
+        }
+      }
+    }
+    
+    if (keysToRemove.length > 0) {
+      await chrome.storage.local.remove(keysToRemove);
+    }
+    
     persistedData = null;
+    currentFingerprint = null;
   } catch (err) {
     console.error('Failed to clear persisted detections:', err);
   }
@@ -531,8 +560,21 @@ async function savePersistSetting(enabled) {
   try {
     await chrome.storage.local.set({ persistEnabled: enabled });
     persistEnabled = enabled;
-    if (!enabled && currentFingerprint) {
-      await clearPersistedDetections();
+    if (!enabled) {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      let host = null;
+      let path = null;
+      if (tab?.url) {
+        try {
+          const url = new URL(tab.url);
+          host = url.host;
+          path = url.pathname;
+        } catch {}
+      }
+      await clearPersistedDetections(host, path);
+      isShowingRestoredData = false;
+      formLooksReset = false;
+      updateReapplyVisibility();
     }
   } catch (err) {
     console.error('Failed to save persist setting:', err);
@@ -544,19 +586,42 @@ async function clearDetections() {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab?.id) return;
     
-    await clearPersistedDetections();
+    let host = null;
+    let path = null;
+    if (tab.url) {
+      try {
+        const url = new URL(tab.url);
+        host = url.host;
+        path = url.pathname;
+      } catch {}
+    }
+    
+    justCleared = true;
+    
+    await clearPersistedDetections(host, path);
     await chrome.tabs.sendMessage(tab.id, { type: 'CLEAR_BASELINE' });
-    showToast('Detections cleared');
     
     isShowingRestoredData = false;
     formLooksReset = false;
     persistedData = null;
+    currentData = null;
+    currentFingerprint = null;
+    
+    updateUI({
+      host: host || '—',
+      path: path || '',
+      dirty: [],
+      coverage: { tracked: 0, total: 0, skipped: 0 }
+    });
     updateReapplyVisibility();
     
-    await refreshData();
+    showToast('Detections cleared');
+    
+    setTimeout(() => { justCleared = false; }, 500);
   } catch (err) {
     console.error('Failed to clear detections:', err);
     showToast('Failed to clear');
+    justCleared = false;
   }
 }
 
