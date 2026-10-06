@@ -16,8 +16,17 @@
   
   const SAVE_BUTTON_PATTERN = /^(save|update|submit|apply|publish|confirm|create|add|store)$/i;
   const SAVE_BUTTON_CONTAINS = /(save|update|submit|apply|publish|confirm)\s*(changes?|settings?|form)?/i;
+  
+  const GENERIC_TYPE_STRINGS = new Set([
+    'text', 'multi-line text', 'multiline text', 'single line text',
+    'choice', 'multiple choice', 'checkbox', 'radio', 'dropdown',
+    'date', 'number', 'email', 'rating', 'likert', 'ranking',
+    'file upload', 'section', 'input', 'textarea', 'select'
+  ]);
 
   let baseline = new Map();
+  let radioGroupLabels = new Map();
+  let checkboxGroupLabels = new Map();
   let totalFieldsScanned = 0;
   let skippedSensitive = 0;
   let saveInterceptEnabled = true;
@@ -37,47 +46,300 @@
     
     return false;
   }
-
-  function getFieldLabel(el) {
+  
+  function isGenericTypeString(text) {
+    if (!text) return false;
+    return GENERIC_TYPE_STRINGS.has(text.toLowerCase().trim());
+  }
+  
+  function isValidLabelText(text) {
+    if (!text) return false;
+    text = text.trim();
+    if (text.length === 0 || text.length > 200) return false;
+    if (isGenericTypeString(text)) return false;
+    if (/^[0-9.]+$/.test(text)) return false;
+    return true;
+  }
+  
+  function getQuestionContainerLabel(el) {
+    const questionSelectors = [
+      '[class*="question-title"]',
+      '[class*="questionTitle"]',
+      '[class*="question_title"]',
+      '[class*="QuestionTitle"]',
+      '[class*="field-label"]',
+      '[class*="fieldLabel"]',
+      '[class*="form-label"]',
+      '[class*="formLabel"]',
+      '[data-automation-id*="questionTitle"]',
+      '[data-automation-id*="question-title"]',
+      '[role="heading"]',
+      'legend',
+      '.office-form-question-title',
+      '.question-title-box',
+      '.freebirdFormviewerComponentsQuestionBaseTitle',
+      '.freebirdFormviewerComponentsQuestionBaseHeader',
+      '[class*="question"] [class*="title"]',
+      '[class*="question"] [class*="header"]',
+      '[class*="question"] h1',
+      '[class*="question"] h2',
+      '[class*="question"] h3',
+      '[class*="question"] h4'
+    ];
+    
+    const containerSelectors = [
+      '[class*="question"]',
+      '[class*="Question"]',
+      '[class*="form-group"]',
+      '[class*="formGroup"]',
+      '[class*="field-container"]',
+      '[class*="fieldContainer"]',
+      '[role="group"]',
+      '[role="radiogroup"]',
+      'fieldset',
+      '[data-automation-id*="question"]',
+      '.office-form-question',
+      '.freebirdFormviewerComponentsQuestionBase'
+    ];
+    
+    for (const containerSel of containerSelectors) {
+      const container = el.closest(containerSel);
+      if (!container) continue;
+      
+      for (const titleSel of questionSelectors) {
+        const titleEl = container.querySelector(titleSel);
+        if (titleEl && titleEl !== el) {
+          const text = titleEl.textContent.trim();
+          if (isValidLabelText(text)) {
+            return text;
+          }
+        }
+      }
+      
+      const heading = container.querySelector('h1, h2, h3, h4, h5, h6');
+      if (heading && heading !== el) {
+        const text = heading.textContent.trim();
+        if (isValidLabelText(text)) {
+          return text;
+        }
+      }
+    }
+    
+    return null;
+  }
+  
+  function getLegendOrFieldsetLabel(el) {
+    const fieldset = el.closest('fieldset');
+    if (fieldset) {
+      const legend = fieldset.querySelector('legend');
+      if (legend) {
+        const text = legend.textContent.trim();
+        if (isValidLabelText(text)) {
+          return text;
+        }
+      }
+    }
+    return null;
+  }
+  
+  function getRadioGroupLabel(el) {
+    if (el.type !== 'radio') return null;
+    const name = el.name;
+    if (!name) return null;
+    
+    if (radioGroupLabels.has(name)) {
+      return radioGroupLabels.get(name);
+    }
+    
+    const radios = document.querySelectorAll(`input[type="radio"][name="${CSS.escape(name)}"]`);
+    if (radios.length === 0) return null;
+    
+    const firstRadio = radios[0];
+    
+    const groupContainer = firstRadio.closest('[role="radiogroup"]');
+    if (groupContainer) {
+      const labelledBy = groupContainer.getAttribute('aria-labelledby');
+      if (labelledBy) {
+        const labelEl = document.getElementById(labelledBy);
+        if (labelEl) {
+          const text = labelEl.textContent.trim();
+          if (isValidLabelText(text)) {
+            radioGroupLabels.set(name, text);
+            return text;
+          }
+        }
+      }
+      const groupLabel = groupContainer.getAttribute('aria-label');
+      if (groupLabel && isValidLabelText(groupLabel)) {
+        radioGroupLabels.set(name, groupLabel);
+        return groupLabel;
+      }
+    }
+    
+    const legendLabel = getLegendOrFieldsetLabel(firstRadio);
+    if (legendLabel) {
+      radioGroupLabels.set(name, legendLabel);
+      return legendLabel;
+    }
+    
+    const questionLabel = getQuestionContainerLabel(firstRadio);
+    if (questionLabel) {
+      radioGroupLabels.set(name, questionLabel);
+      return questionLabel;
+    }
+    
+    return null;
+  }
+  
+  function getCheckboxGroupLabel(el) {
+    if (el.type !== 'checkbox') return null;
+    
+    const questionLabel = getQuestionContainerLabel(el);
+    if (questionLabel) {
+      return questionLabel;
+    }
+    
+    const legendLabel = getLegendOrFieldsetLabel(el);
+    if (legendLabel) {
+      return legendLabel;
+    }
+    
+    return null;
+  }
+  
+  function getAssociatedLabelText(el) {
     if (el.id) {
       const labelEl = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
-      if (labelEl && labelEl.textContent.trim()) {
-        return labelEl.textContent.trim();
+      if (labelEl) {
+        const clone = labelEl.cloneNode(true);
+        clone.querySelectorAll('input, select, textarea, [type="hidden"]').forEach(c => c.remove());
+        const text = clone.textContent.trim();
+        if (isValidLabelText(text)) {
+          return text;
+        }
       }
     }
     
     const wrappingLabel = el.closest('label');
     if (wrappingLabel) {
       const clone = wrappingLabel.cloneNode(true);
-      clone.querySelectorAll('input, select, textarea').forEach(c => c.remove());
+      clone.querySelectorAll('input, select, textarea, [type="hidden"]').forEach(c => c.remove());
       const text = clone.textContent.trim();
-      if (text) return text;
+      if (isValidLabelText(text)) {
+        return text;
+      }
     }
     
+    return null;
+  }
+  
+  function getAriaLabel(el) {
     const ariaLabelledBy = el.getAttribute('aria-labelledby');
     if (ariaLabelledBy) {
-      const labelEl = document.getElementById(ariaLabelledBy);
-      if (labelEl && labelEl.textContent.trim()) {
-        return labelEl.textContent.trim();
+      const ids = ariaLabelledBy.split(/\s+/);
+      const texts = [];
+      for (const id of ids) {
+        const labelEl = document.getElementById(id);
+        if (labelEl) {
+          texts.push(labelEl.textContent.trim());
+        }
+      }
+      const combined = texts.join(' ').trim();
+      if (isValidLabelText(combined)) {
+        return combined;
       }
     }
     
     const ariaLabel = el.getAttribute('aria-label');
-    if (ariaLabel) return ariaLabel;
-    
-    const placeholder = el.getAttribute('placeholder');
-    if (placeholder) return placeholder;
-    
-    const prevSibling = el.previousElementSibling;
-    if (prevSibling && ['SPAN', 'LABEL', 'DIV', 'TD', 'TH'].includes(prevSibling.tagName)) {
-      const text = prevSibling.textContent.trim();
-      if (text && text.length < 60) return text;
+    if (ariaLabel && isValidLabelText(ariaLabel)) {
+      return ariaLabel;
     }
     
-    const name = el.name || el.id || '';
-    if (name) {
-      return name.replace(/[-_]/g, ' ').replace(/([a-z])([A-Z])/g, '$1 $2')
-        .replace(/\b\w/g, c => c.toUpperCase());
+    return null;
+  }
+  
+  function getNearbyHeadingOrText(el) {
+    let current = el;
+    let maxDepth = 5;
+    
+    while (current && maxDepth > 0) {
+      const parent = current.parentElement;
+      if (!parent) break;
+      
+      let sibling = current.previousElementSibling;
+      let siblingCount = 0;
+      while (sibling && siblingCount < 3) {
+        if (['H1', 'H2', 'H3', 'H4', 'H5', 'H6'].includes(sibling.tagName)) {
+          const text = sibling.textContent.trim();
+          if (isValidLabelText(text)) {
+            return text;
+          }
+        }
+        
+        if (['SPAN', 'DIV', 'P', 'TD', 'TH', 'DT'].includes(sibling.tagName)) {
+          const text = sibling.textContent.trim();
+          if (isValidLabelText(text) && text.length < 100) {
+            return text;
+          }
+        }
+        
+        sibling = sibling.previousElementSibling;
+        siblingCount++;
+      }
+      
+      current = parent;
+      maxDepth--;
+    }
+    
+    return null;
+  }
+  
+  function humanizeName(name) {
+    if (!name) return null;
+    const humanized = name
+      .replace(/[-_]/g, ' ')
+      .replace(/([a-z])([A-Z])/g, '$1 $2')
+      .replace(/\b\w/g, c => c.toUpperCase())
+      .trim();
+    
+    if (isValidLabelText(humanized)) {
+      return humanized;
+    }
+    return null;
+  }
+
+  function getFieldLabel(el, isForGroup = false) {
+    if (el.type === 'radio' && !isForGroup) {
+      const groupLabel = getRadioGroupLabel(el);
+      if (groupLabel) return groupLabel;
+    }
+    
+    if (el.type === 'checkbox' && !isForGroup) {
+      const groupLabel = getCheckboxGroupLabel(el);
+      if (groupLabel) return groupLabel;
+    }
+    
+    const questionLabel = getQuestionContainerLabel(el);
+    if (questionLabel) return questionLabel;
+    
+    const legendLabel = getLegendOrFieldsetLabel(el);
+    if (legendLabel) return legendLabel;
+    
+    const associatedLabel = getAssociatedLabelText(el);
+    if (associatedLabel) return associatedLabel;
+    
+    const ariaLabel = getAriaLabel(el);
+    if (ariaLabel) return ariaLabel;
+    
+    const nearbyText = getNearbyHeadingOrText(el);
+    if (nearbyText) return nearbyText;
+    
+    const humanizedName = humanizeName(el.name || el.id);
+    if (humanizedName) return humanizedName;
+    
+    const placeholder = el.getAttribute('placeholder');
+    if (placeholder && isValidLabelText(placeholder)) {
+      return `(placeholder) ${placeholder}`;
     }
     
     return 'Unlabeled field';
@@ -104,17 +366,92 @@
     return `path:${path.join('>')}`;
   }
 
+  function getRadioOptionLabel(radio) {
+    if (radio.id) {
+      const labelEl = document.querySelector(`label[for="${CSS.escape(radio.id)}"]`);
+      if (labelEl) {
+        const text = labelEl.textContent.trim();
+        if (text && !isGenericTypeString(text)) {
+          return text;
+        }
+      }
+    }
+    
+    const wrappingLabel = radio.closest('label');
+    if (wrappingLabel) {
+      const clone = wrappingLabel.cloneNode(true);
+      clone.querySelectorAll('input').forEach(c => c.remove());
+      const text = clone.textContent.trim();
+      if (text && !isGenericTypeString(text)) {
+        return text;
+      }
+    }
+    
+    const nextSibling = radio.nextSibling;
+    if (nextSibling && nextSibling.nodeType === Node.TEXT_NODE) {
+      const text = nextSibling.textContent.trim();
+      if (text && !isGenericTypeString(text)) {
+        return text;
+      }
+    }
+    
+    if (radio.value && !isGenericTypeString(radio.value)) {
+      return radio.value;
+    }
+    
+    return '(option)';
+  }
+  
+  function getCheckboxOptionLabel(checkbox) {
+    if (checkbox.id) {
+      const labelEl = document.querySelector(`label[for="${CSS.escape(checkbox.id)}"]`);
+      if (labelEl) {
+        const text = labelEl.textContent.trim();
+        if (text && !isGenericTypeString(text)) {
+          return text;
+        }
+      }
+    }
+    
+    const wrappingLabel = checkbox.closest('label');
+    if (wrappingLabel) {
+      const clone = wrappingLabel.cloneNode(true);
+      clone.querySelectorAll('input').forEach(c => c.remove());
+      const text = clone.textContent.trim();
+      if (text && !isGenericTypeString(text)) {
+        return text;
+      }
+    }
+    
+    const nextSibling = checkbox.nextSibling;
+    if (nextSibling && nextSibling.nodeType === Node.TEXT_NODE) {
+      const text = nextSibling.textContent.trim();
+      if (text && !isGenericTypeString(text)) {
+        return text;
+      }
+    }
+    
+    return checkbox.value || '(option)';
+  }
+
   function getFieldValue(el) {
     const tag = el.tagName.toLowerCase();
     
     if (tag === 'input') {
       if (el.type === 'checkbox') {
+        const groupLabel = getCheckboxGroupLabel(el);
+        if (groupLabel) {
+          return el.checked ? getCheckboxOptionLabel(el) : '(unchecked)';
+        }
         return el.checked ? 'Checked' : 'Unchecked';
       }
       if (el.type === 'radio') {
         const name = el.name;
         const checked = document.querySelector(`input[name="${CSS.escape(name)}"]:checked`);
-        return checked ? (checked.labels?.[0]?.textContent.trim() || checked.value) : '(none)';
+        if (checked) {
+          return getRadioOptionLabel(checked);
+        }
+        return '(none selected)';
       }
       return el.value;
     }
@@ -148,6 +485,34 @@
     return results;
   }
 
+  function getCheckboxGroupKey(checkbox) {
+    const groupLabel = getCheckboxGroupLabel(checkbox);
+    if (!groupLabel) return null;
+    
+    const container = checkbox.closest('[class*="question"], [class*="Question"], [role="group"], fieldset, [class*="form-group"]');
+    if (container) {
+      const checkboxes = container.querySelectorAll('input[type="checkbox"]');
+      if (checkboxes.length > 1) {
+        return `checkbox-group:${groupLabel}`;
+      }
+    }
+    return null;
+  }
+  
+  function getCheckboxGroupValue(checkbox) {
+    const container = checkbox.closest('[class*="question"], [class*="Question"], [role="group"], fieldset, [class*="form-group"]');
+    if (!container) return checkbox.checked ? 'Checked' : 'Unchecked';
+    
+    const checkboxes = container.querySelectorAll('input[type="checkbox"]');
+    const selected = [];
+    for (const cb of checkboxes) {
+      if (cb.checked) {
+        selected.push(getCheckboxOptionLabel(cb));
+      }
+    }
+    return selected.length > 0 ? selected.join(', ') : '(none selected)';
+  }
+
   function collectFields() {
     const selectors = 'input, select, textarea, [contenteditable="true"]';
     const elements = deepQueryAll(document, selectors);
@@ -156,6 +521,10 @@
     let skipped = 0;
     
     const seenRadios = new Set();
+    const seenCheckboxGroups = new Set();
+    
+    radioGroupLabels.clear();
+    checkboxGroupLabels.clear();
     
     for (const el of elements) {
       if (!el.offsetParent && el.type !== 'hidden') continue;
@@ -163,6 +532,29 @@
       if (el.type === 'radio') {
         if (seenRadios.has(el.name)) continue;
         seenRadios.add(el.name);
+      }
+      
+      if (el.type === 'checkbox') {
+        const groupKey = getCheckboxGroupKey(el);
+        if (groupKey) {
+          if (seenCheckboxGroups.has(groupKey)) continue;
+          seenCheckboxGroups.add(groupKey);
+          
+          total++;
+          if (shouldSkipField(el)) {
+            skipped++;
+            continue;
+          }
+          
+          fields.push({
+            element: el,
+            key: groupKey,
+            label: getCheckboxGroupLabel(el),
+            type: 'checkbox-group',
+            value: getCheckboxGroupValue(el)
+          });
+          continue;
+        }
       }
       
       total++;
