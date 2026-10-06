@@ -9,9 +9,15 @@
 <body>
   <div class="panel">
     <header class="header">
-      <div class="header-main">
-        <h1 class="title">ChangePreview</h1>
-        <div class="host" id="hostInfo">—</div>
+      <div class="header-row">
+        <div class="header-main">
+          <h1 class="title">ChangePreview</h1>
+          <div class="host" id="hostInfo">—</div>
+        </div>
+        <label class="persist-toggle" title="Keep detections after reload">
+          <input type="checkbox" id="persistToggle">
+          <span class="persist-label">Keep after reload</span>
+        </label>
       </div>
       <div class="header-meta">
         <span class="change-count" id="changeCount">0 changes</span>
@@ -55,13 +61,9 @@
           <span class="btn-icon">⬇</span> Download CSV
         </button>
       </div>
-      <div class="persist-row">
-        <label class="toggle-label">
-          <input type="checkbox" id="persistToggle">
-          <span class="toggle-text">Keep detections after reload</span>
-        </label>
-        <button class="btn btn-accent" id="applyChanges" disabled>
-          <span class="btn-icon">↩</span> Apply my changes
+      <div class="reapply-row hidden" id="reapplyRow">
+        <button class="btn btn-accent" id="reapplyChanges">
+          <span class="btn-icon">↩</span> Reapply my changes
         </button>
       </div>
       <div class="footer-bottom">

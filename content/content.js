@@ -1038,8 +1038,15 @@
     return results;
   }
   
+  /**
+   * Applies one change. Uses prioritized field matching:
+   * 1. Direct key match (name:*, id:*, path:*)
+   * 2. Fallback to name attribute from stored key
+   * 3. Fallback to id attribute from stored key
+   * 4. Fallback to label text match
+   */
   function applyOneChange(change) {
-    const el = findFieldByKey(change.key);
+    const el = findFieldForChange(change);
     if (!el) return false;
     
     if (shouldSkipField(el)) return false;
@@ -1050,6 +1057,33 @@
       console.error('Failed to apply change:', change.key, err);
       return false;
     }
+  }
+  
+  function findFieldForChange(change) {
+    if (!change) return null;
+    
+    let el = findFieldByKey(change.key);
+    if (el) return el;
+    
+    if (change.key) {
+      if (change.key.startsWith('name:')) {
+        const name = change.key.slice(5);
+        el = document.querySelector(`[name="${CSS.escape(name)}"]`);
+        if (el) return el;
+      }
+      if (change.key.startsWith('id:')) {
+        const id = change.key.slice(3);
+        el = document.getElementById(id);
+        if (el) return el;
+      }
+    }
+    
+    if (change.label && change.label !== 'Unlabeled field') {
+      el = findFieldByLabel(change.label, change.type);
+      if (el) return el;
+    }
+    
+    return null;
   }
   
   function findFieldByKey(key) {
@@ -1076,6 +1110,28 @@
     
     if (key.startsWith('checkbox-group:')) {
       return null;
+    }
+    
+    return null;
+  }
+  
+  function findFieldByLabel(targetLabel, targetType) {
+    const normalizedTarget = targetLabel.toLowerCase().trim();
+    const selectors = 'input, select, textarea, [contenteditable="true"]';
+    const elements = deepQueryAll(document, selectors);
+    
+    for (const el of elements) {
+      if (!el.offsetParent && el.type !== 'hidden') continue;
+      if (shouldSkipField(el)) continue;
+      
+      if (targetType && el.type !== targetType && el.tagName.toLowerCase() !== targetType) {
+        continue;
+      }
+      
+      const label = getFieldLabel(el);
+      if (label && label.toLowerCase().trim() === normalizedTarget) {
+        return el;
+      }
     }
     
     return null;
@@ -1160,6 +1216,7 @@
           host: location.hostname,
           path: location.pathname,
           dirty: dirty,
+          allFieldKeys: Array.from(baseline.keys()),
           coverage: {
             tracked: baseline.size,
             total: totalFieldsScanned,
