@@ -82,6 +82,29 @@
    */
   let suppressUntil = 0;
   
+  /**
+   * CRITICAL: Flag set after Clear to block ALL dirty detection.
+   * This ensures zero detections after Clear until real user input.
+   * 
+   * The problem it solves:
+   * After Reapply, baseline has "was" values. After Clear, snapshotBaseline sets
+   * baseline to current values. But timing/async issues can cause the old baseline
+   * to be used, making getDirtyFields() return the full reapplied set again.
+   * 
+   * With this flag:
+   * - CLEAR_BASELINE sets clearedSession = true
+   * - getDirtyFields() returns [] while clearedSession is true
+   * - First REAL user input (not programmatic) sets clearedSession = false
+   * - Only then do we start tracking dirty fields again
+   */
+  let clearedSession = false;
+  
+  /**
+   * Flag to distinguish programmatic changes (from Reapply) vs real user input.
+   * Set to true during APPLY_CHANGES, prevents clearedSession from being reset.
+   */
+  let applyingChanges = false;
+  
   function isSuppressed() {
     return Date.now() < suppressUntil;
   }
@@ -728,6 +751,12 @@
   }
   
   function getDirtyFields() {
+    // CRITICAL: After Clear, return empty until real user input
+    // This prevents resurrection of detections from stale baseline/timing issues
+    if (clearedSession) {
+      return [];
+    }
+    
     const currentFields = collectFields();
     const dirty = [];
     
@@ -1021,8 +1050,23 @@
       notifyPanel();
     }, 300);
     
-    document.addEventListener('input', debouncedUpdate, true);
-    document.addEventListener('change', debouncedUpdate, true);
+    /**
+     * On real user input, reset clearedSession so dirty detection resumes.
+     * Do NOT reset if applyingChanges is true (programmatic input from Reapply).
+     * This is what allows new detections after Clear.
+     */
+    function handleUserInput(e) {
+      // Only reset clearedSession on real user input, not programmatic changes
+      if (clearedSession && !applyingChanges && e.isTrusted) {
+        clearedSession = false;
+        // Re-baseline from current values so this edit is the first dirty entry
+        snapshotBaseline(true);
+      }
+      debouncedUpdate();
+    }
+    
+    document.addEventListener('input', handleUserInput, true);
+    document.addEventListener('change', handleUserInput, true);
   }
 
   function setupSaveIntercept() {
@@ -1354,16 +1398,17 @@
       case 'CLEAR_BASELINE':
         /**
          * Clear detections: re-establish baseline from current live form values.
-         * Use silent=true to prevent notifyPanel from sending updates that could
-         * race with the panel's clear operation and cause phantom dirty rows.
-         * The panel will explicitly query GET_FIELDS when it's ready.
          * 
-         * REGRESSION FIX (Keep→Reload→Reapply→Clear resurrection bug):
-         * Suppress notifications for 3 seconds to cover:
-         * - Debounced input events from Reapply (300ms debounce + latency)
-         * - Panel's periodic refresh (2000ms interval)
-         * - Any MutationObserver triggers
+         * CRITICAL FIX for Keep→Reload→Reapply→Clear resurrection:
+         * 1. Set clearedSession = true so getDirtyFields() returns [] until real user input
+         * 2. Re-baseline from current form values
+         * 3. Suppress notifications
+         * 
+         * The clearedSession flag is the definitive fix - it ensures ZERO detections
+         * after Clear regardless of timing, baseline state, or async issues.
+         * Only a real user input (not programmatic) will reset the flag.
          */
+        clearedSession = true;
         suppressFor(3000);
         snapshotBaseline(true);
         sendResponse({ success: true, baselineSize: baseline.size });
@@ -1387,9 +1432,13 @@
          * Instead: set baseline[key] = was for each applied change.
          * This keeps the full detection list intact after Reapply.
          * User edits update that field's "now" value while keeping other rows.
+         * 
+         * Note: applyingChanges flag prevents input events from resetting clearedSession
          */
+        applyingChanges = true;
         suppressFor(1000);
         const applyResults = applyChangesWithBaseline(message.changes || []);
+        setTimeout(() => { applyingChanges = false; }, 500);
         sendResponse(applyResults);
         break;
         
