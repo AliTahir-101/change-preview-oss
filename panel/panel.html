@@ -51,16 +51,30 @@
         <button class="btn btn-secondary" id="copyCsv" disabled>
           <span class="btn-icon">📄</span> Copy CSV
         </button>
-      </div>
-      <div class="actions-row">
-        <button class="btn btn-text" id="clearBaseline">
-          <span class="btn-icon">↻</span> Re-snapshot
+        <button class="btn btn-secondary" id="downloadCsv" disabled>
+          <span class="btn-icon">⬇</span> Download CSV
         </button>
       </div>
-      <div class="privacy-note">
-        <span class="lock-icon">🔒</span> Local only · passwords skipped
+      <div class="footer-bottom">
+        <div class="privacy-note">
+          <span class="lock-icon">🔒</span> Local only · passwords skipped
+        </div>
+        <button class="btn btn-danger-text" id="clearDetections">
+          <span class="btn-icon">🗑</span> Clear detections
+        </button>
       </div>
     </footer>
+    
+    <div class="confirm-dialog hidden" id="confirmDialog">
+      <div class="confirm-dialog-content">
+        <p>Clear all detected changes?</p>
+        <p class="confirm-hint">This will reset the baseline to current values.</p>
+        <div class="confirm-actions">
+          <button class="btn btn-secondary" id="confirmCancel">Cancel</button>
+          <button class="btn btn-danger" id="confirmClear">Clear</button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <div class="toast" id="toast"></div>

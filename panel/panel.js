@@ -13,9 +13,19 @@ const elements = {
   changesBody: document.getElementById('changesBody'),
   copyMarkdown: document.getElementById('copyMarkdown'),
   copyCsv: document.getElementById('copyCsv'),
-  clearBaseline: document.getElementById('clearBaseline'),
+  downloadCsv: document.getElementById('downloadCsv'),
+  clearDetections: document.getElementById('clearDetections'),
+  confirmDialog: document.getElementById('confirmDialog'),
+  confirmCancel: document.getElementById('confirmCancel'),
+  confirmClear: document.getElementById('confirmClear'),
   toast: document.getElementById('toast')
 };
+
+const COPY_ICON_SVG = '<rect x="9" y="9" width="13" height="13" rx="2" stroke="currentColor" stroke-width="2" fill="none"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" stroke="currentColor" stroke-width="2" fill="none"/>';
+const EXPAND_ICON_SVG = '<path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>';
+const COLLAPSE_ICON_SVG = '<path d="M18 15l-6-6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>';
+
+const LONG_VALUE_THRESHOLD = 60;
 
 let currentData = null;
 
@@ -126,6 +136,7 @@ function updateUI(data) {
   elements.changesTable.classList.toggle('hidden', !hasChanges);
   elements.copyMarkdown.disabled = !hasChanges;
   elements.copyCsv.disabled = !hasChanges;
+  elements.downloadCsv.disabled = !hasChanges;
   
   elements.changesBody.innerHTML = '';
   
@@ -147,8 +158,10 @@ function updateUI(data) {
       labelWrapper.className = 'field-label-wrapper';
       
       const labelSpan = document.createElement('span');
-      labelSpan.className = 'field-label';
+      labelSpan.className = 'field-label field-label-copyable';
       labelSpan.textContent = field.label;
+      labelSpan.title = 'Click to copy field name';
+      labelSpan.addEventListener('click', () => copyValue(field.label, 'Field name'));
       labelWrapper.appendChild(labelSpan);
       
       const typeIcon = createTypeInfoIcon(field.type);
@@ -156,23 +169,8 @@ function updateUI(data) {
       
       labelCell.appendChild(labelWrapper);
       
-      const wasCell = document.createElement('td');
-      const wasSpan = document.createElement('span');
-      wasSpan.className = 'field-was value-copyable';
-      wasSpan.textContent = truncate(field.was);
-      wasSpan.title = 'Click to copy previous value';
-      wasSpan.dataset.value = field.was || '';
-      wasSpan.addEventListener('click', () => copyValue(field.was, 'Previous value'));
-      wasCell.appendChild(wasSpan);
-      
-      const nowCell = document.createElement('td');
-      const nowSpan = document.createElement('span');
-      nowSpan.className = 'field-now value-copyable';
-      nowSpan.textContent = truncate(field.now);
-      nowSpan.title = 'Click to copy current value';
-      nowSpan.dataset.value = field.now || '';
-      nowSpan.addEventListener('click', () => copyValue(field.now, 'Current value'));
-      nowCell.appendChild(nowSpan);
+      const wasCell = createValueCell(field.was, 'field-was', 'Previous value');
+      const nowCell = createValueCell(field.now, 'field-now', 'Current value');
       
       row.appendChild(numCell);
       row.appendChild(labelCell);
@@ -180,6 +178,79 @@ function updateUI(data) {
       row.appendChild(nowCell);
       elements.changesBody.appendChild(row);
     }
+  }
+}
+
+function createValueCell(value, className, copyLabel) {
+  const cell = document.createElement('td');
+  const wrapper = document.createElement('div');
+  wrapper.className = 'value-cell-wrapper';
+  
+  const displayValue = value || '(empty)';
+  const isLong = displayValue.length > LONG_VALUE_THRESHOLD;
+  
+  const valueSpan = document.createElement('span');
+  valueSpan.className = `${className} value-text`;
+  valueSpan.dataset.full = displayValue;
+  valueSpan.dataset.expanded = 'false';
+  
+  if (isLong) {
+    valueSpan.textContent = truncate(displayValue, LONG_VALUE_THRESHOLD);
+    valueSpan.classList.add('truncated');
+  } else {
+    valueSpan.textContent = displayValue;
+  }
+  
+  wrapper.appendChild(valueSpan);
+  
+  const actionsWrapper = document.createElement('div');
+  actionsWrapper.className = 'value-actions';
+  
+  if (isLong) {
+    const expandBtn = document.createElement('button');
+    expandBtn.className = 'value-action-btn expand-btn';
+    expandBtn.title = 'Expand';
+    expandBtn.innerHTML = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none">${EXPAND_ICON_SVG}</svg>`;
+    expandBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleExpand(valueSpan, expandBtn);
+    });
+    actionsWrapper.appendChild(expandBtn);
+  }
+  
+  const copyBtn = document.createElement('button');
+  copyBtn.className = 'value-action-btn copy-btn';
+  copyBtn.title = `Copy ${copyLabel.toLowerCase()}`;
+  copyBtn.innerHTML = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none">${COPY_ICON_SVG}</svg>`;
+  copyBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    copyValue(value, copyLabel);
+  });
+  actionsWrapper.appendChild(copyBtn);
+  
+  wrapper.appendChild(actionsWrapper);
+  cell.appendChild(wrapper);
+  
+  valueSpan.addEventListener('click', () => copyValue(value, copyLabel));
+  
+  return cell;
+}
+
+function toggleExpand(valueSpan, expandBtn) {
+  const isExpanded = valueSpan.dataset.expanded === 'true';
+  
+  if (isExpanded) {
+    valueSpan.textContent = truncate(valueSpan.dataset.full, LONG_VALUE_THRESHOLD);
+    valueSpan.dataset.expanded = 'false';
+    valueSpan.classList.add('truncated');
+    expandBtn.innerHTML = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none">${EXPAND_ICON_SVG}</svg>`;
+    expandBtn.title = 'Expand';
+  } else {
+    valueSpan.textContent = valueSpan.dataset.full;
+    valueSpan.dataset.expanded = 'true';
+    valueSpan.classList.remove('truncated');
+    expandBtn.innerHTML = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none">${COLLAPSE_ICON_SVG}</svg>`;
+    expandBtn.title = 'Collapse';
   }
 }
 
@@ -266,18 +337,50 @@ async function refreshData() {
   }
 }
 
-async function clearBaseline() {
+function showConfirmDialog() {
+  elements.confirmDialog.classList.remove('hidden');
+}
+
+function hideConfirmDialog() {
+  elements.confirmDialog.classList.add('hidden');
+}
+
+async function clearDetections() {
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab?.id) return;
     
     await chrome.tabs.sendMessage(tab.id, { type: 'CLEAR_BASELINE' });
-    showToast('Baseline re-snapshotted');
+    showToast('Detections cleared');
     await refreshData();
   } catch (err) {
-    console.error('Failed to clear baseline:', err);
-    showToast('Failed to re-snapshot');
+    console.error('Failed to clear detections:', err);
+    showToast('Failed to clear');
   }
+}
+
+function generateFilename() {
+  const now = new Date();
+  const date = now.toISOString().split('T')[0];
+  const host = currentData?.host?.replace(/[^a-zA-Z0-9]/g, '-') || 'page';
+  return `change-preview-${host}-${date}.csv`;
+}
+
+function downloadCsv() {
+  const csv = generateCsv();
+  if (!csv) return;
+  
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = generateFilename();
+  link.style.display = 'none';
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+  showToast('CSV downloaded');
 }
 
 elements.copyMarkdown.addEventListener('click', () => {
@@ -290,7 +393,16 @@ elements.copyCsv.addEventListener('click', () => {
   if (csv) copyToClipboard(csv, 'CSV');
 });
 
-elements.clearBaseline.addEventListener('click', clearBaseline);
+elements.downloadCsv.addEventListener('click', downloadCsv);
+
+elements.clearDetections.addEventListener('click', showConfirmDialog);
+
+elements.confirmCancel.addEventListener('click', hideConfirmDialog);
+
+elements.confirmClear.addEventListener('click', () => {
+  hideConfirmDialog();
+  clearDetections();
+});
 
 chrome.runtime.onMessage.addListener((message) => {
   if (message.type === 'FIELDS_UPDATE') {
