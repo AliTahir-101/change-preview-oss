@@ -76,10 +76,19 @@
   let pendingSaveTarget = null;
   
   /**
-   * Flag to suppress notifications immediately after baseline clear.
-   * Prevents phantom dirty rows from racing with the clear operation.
+   * Timestamp when notifications were last suppressed.
+   * Used to prevent phantom dirty rows from racing with clear/reapply operations.
+   * We use a timestamp instead of a boolean to handle overlapping suppression windows.
    */
-  let suppressNotify = false;
+  let suppressUntil = 0;
+  
+  function isSuppressed() {
+    return Date.now() < suppressUntil;
+  }
+  
+  function suppressFor(ms) {
+    suppressUntil = Math.max(suppressUntil, Date.now() + ms);
+  }
 
   function shouldSkipField(el) {
     if (SKIP_TYPES.has(el.type)) return true;
@@ -677,6 +686,11 @@
    * 4. Since baseline === current, getDirtyFields() returns empty array
    * 5. In silent mode, we skip notifyPanel to avoid any race conditions
    * 6. Panel will query GET_FIELDS when ready and get clean state
+   * 
+   * REGRESSION NOTE (Keep→Reload→Reapply→Clear sequence):
+   * After Clear, baseline MUST equal current live form values.
+   * This ensures getDirtyFields() returns empty until next REAL user edit.
+   * The suppressFor() call blocks notifications during the transition window.
    */
   function snapshotBaseline(silent = false) {
     baseline.clear();
@@ -690,7 +704,7 @@
       });
     }
     updateBadge();
-    if (!silent && !suppressNotify) {
+    if (!silent && !isSuppressed()) {
       notifyPanel();
     }
   }
@@ -762,8 +776,8 @@
   }
 
   function notifyPanel() {
-    // After Clear, suppress notifications to prevent phantom dirty rows
-    if (suppressNotify) return;
+    // After Clear/Reapply, suppress notifications to prevent phantom dirty rows
+    if (isSuppressed()) return;
     
     const dirty = getDirtyFields();
     chrome.runtime.sendMessage({
@@ -1284,13 +1298,15 @@
          * Use silent=true to prevent notifyPanel from sending updates that could
          * race with the panel's clear operation and cause phantom dirty rows.
          * The panel will explicitly query GET_FIELDS when it's ready.
+         * 
+         * REGRESSION FIX (Keep→Reload→Reapply→Clear resurrection bug):
+         * Suppress notifications for 3 seconds to cover:
+         * - Debounced input events from Reapply (300ms debounce + latency)
+         * - Panel's periodic refresh (2000ms interval)
+         * - Any MutationObserver triggers
          */
-        suppressNotify = true;
+        suppressFor(3000);
         snapshotBaseline(true);
-        
-        // Allow notifications again after a brief delay
-        setTimeout(() => { suppressNotify = false; }, 500);
-        
         sendResponse({ success: true, baselineSize: baseline.size });
         break;
         
@@ -1300,7 +1316,22 @@
         break;
         
       case 'APPLY_CHANGES':
+        /**
+         * Apply stored values back to form fields.
+         * After applying, re-baseline so the applied values become the new baseline.
+         * This prevents the applied values from appearing as "dirty".
+         * Suppress notifications during apply to prevent the input/change events
+         * triggered by setFieldValue from causing phantom dirty rows.
+         */
+        suppressFor(1000);
         const results = applyChanges(message.changes || []);
+        
+        // Re-baseline after apply so applied values are the new baseline
+        // Future edits will be compared against this post-apply state
+        setTimeout(() => {
+          snapshotBaseline(true);
+        }, 100);
+        
         sendResponse(results);
         break;
         

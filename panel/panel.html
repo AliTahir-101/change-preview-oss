@@ -50,19 +50,35 @@
     </main>
 
     <footer class="footer">
-      <div class="export-actions">
-        <button class="btn btn-export" id="copyMarkdown" disabled>
-          <span class="btn-icon">📋</span> Copy Markdown
-        </button>
-        <button class="btn btn-export" id="downloadMarkdown" disabled>
-          <span class="btn-icon">⬇</span> Download Markdown
-        </button>
-        <button class="btn btn-export" id="copyCsv" disabled>
-          <span class="btn-icon">📄</span> Copy CSV
-        </button>
-        <button class="btn btn-export" id="downloadCsv" disabled>
-          <span class="btn-icon">⬇</span> Download CSV
-        </button>
+      <div class="export-groups">
+        <div class="export-group">
+          <span class="export-label">Markdown</span>
+          <button class="export-btn" id="copyMarkdown" disabled title="Copy Markdown" aria-label="Copy Markdown">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="9" y="9" width="13" height="13" rx="2"/>
+              <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>
+            </svg>
+          </button>
+          <button class="export-btn" id="downloadMarkdown" disabled title="Download Markdown" aria-label="Download Markdown">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/>
+            </svg>
+          </button>
+        </div>
+        <div class="export-group">
+          <span class="export-label">CSV</span>
+          <button class="export-btn" id="copyCsv" disabled title="Copy CSV" aria-label="Copy CSV">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="9" y="9" width="13" height="13" rx="2"/>
+              <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>
+            </svg>
+          </button>
+          <button class="export-btn" id="downloadCsv" disabled title="Download CSV" aria-label="Download CSV">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/>
+            </svg>
+          </button>
+        </div>
       </div>
       <div class="reapply-row hidden" id="reapplyRow">
         <button class="btn btn-accent" id="reapplyChanges">
@@ -75,7 +91,7 @@
         </button>
       </div>
       <div class="footer-disclaimer">
-        <span class="lock-icon">🔒</span> ChangePreview stores everything locally in your browser. Nothing is uploaded.
+        Your privacy matters. ChangePreview keeps every detection on this device only — nothing is uploaded or visible to us.
       </div>
     </footer>
     

@@ -38,7 +38,21 @@ let currentFingerprint = null;
 let persistedData = null;
 let isShowingRestoredData = false;
 let formLooksReset = false;
-let justCleared = false;
+
+/**
+ * Timestamp until which Clear is in effect.
+ * During this window: no storage saves, no storage loads, no UI updates from stale data.
+ * This prevents the "resurrection" bug where detections reappear after Clear.
+ */
+let clearedUntil = 0;
+
+function isCleared() {
+  return Date.now() < clearedUntil;
+}
+
+function setClearedFor(ms) {
+  clearedUntil = Date.now() + ms;
+}
 
 const TYPE_LABELS = {
   'text': 'Text',
@@ -330,7 +344,7 @@ async function copyToClipboard(text, format) {
 }
 
 async function refreshData() {
-  if (justCleared) {
+  if (isCleared()) {
     return;
   }
   
@@ -354,7 +368,7 @@ async function refreshData() {
         formLooksReset = false;
       }
       
-      if (persistEnabled && !liveHasChanges && !justCleared) {
+      if (persistEnabled && !liveHasChanges && !isCleared()) {
         let persisted = await loadPersistedDetections(newFingerprint);
         if (!persisted) {
           const fallback = await loadPersistedByHostPath(response.host, response.path);
@@ -390,7 +404,7 @@ async function refreshData() {
   } catch (err) {
     console.error('Failed to get fields:', err);
     
-    if (justCleared) return;
+    if (isCleared()) return;
     
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (tab?.url && persistEnabled) {
@@ -586,15 +600,27 @@ async function savePersistSetting(enabled) {
 /**
  * Clear detections for the current form.
  * 
+ * REGRESSION FIX for Keep→Reload→Reapply→Clear resurrection bug:
+ * After Clear, detections MUST stay at 0 until user makes new edits.
+ * 
  * Order of operations (critical for preventing phantom rows):
- * 1. Set justCleared flag to block any incoming FIELDS_UPDATE messages
+ * 1. Set clearedUntil timestamp to block ALL updates for 5 seconds
  * 2. Clear persisted storage for this form (fingerprint + host/path fallbacks)
  * 3. Tell content script to CLEAR_BASELINE (re-snapshot current values as baseline)
  * 4. Reset all panel state flags
  * 5. Update UI to show 0 changes immediately
- * 6. Keep justCleared true long enough to block periodic refreshData and stale messages
  * 
- * After clear, the list stays empty until the user actually edits fields again.
+ * The clearedUntil window blocks:
+ * - Stale FIELDS_UPDATE messages from content script
+ * - The periodic refreshData interval (2000ms)
+ * - MutationObserver-triggered updates
+ * - Debounced input events from previous Reapply operation
+ * - Any storage load/save operations
+ * 
+ * After the window expires, the list stays empty because:
+ * - Content script baseline === current form values
+ * - Storage is cleared
+ * - Only new real user edits will create new dirty entries
  */
 async function clearDetections() {
   try {
@@ -611,8 +637,8 @@ async function clearDetections() {
       } catch {}
     }
     
-    // Block all updates during and after clear to prevent phantom rows
-    justCleared = true;
+    // Block ALL updates for 5 seconds to prevent resurrection
+    setClearedFor(5000);
     
     // Clear storage for this form
     await clearPersistedDetections(host, path);
@@ -641,16 +667,9 @@ async function clearDetections() {
     updateReapplyVisibility();
     
     showToast('Detections cleared');
-    
-    // Keep justCleared true long enough to block:
-    // - Stale FIELDS_UPDATE messages from content script
-    // - The periodic refreshData interval (2000ms)
-    // - Any MutationObserver-triggered updates
-    setTimeout(() => { justCleared = false; }, 2500);
   } catch (err) {
     console.error('Failed to clear detections:', err);
     showToast('Failed to clear');
-    justCleared = false;
   }
 }
 
@@ -678,11 +697,23 @@ async function reapplyChanges() {
         showToast(`Reapplied ${applied} change${applied === 1 ? '' : 's'}`);
       }
       
+      // After Reapply:
+      // - Content script will re-baseline (applied values become new baseline)
+      // - Hide Reapply button since values are now applied
+      // - DO NOT call refreshData() immediately - let content script settle
+      // - Storage still has the snapshot in case user needs to reapply again
       isShowingRestoredData = false;
       formLooksReset = false;
       updateReapplyVisibility();
       
-      await refreshData();
+      // Update UI to show 0 changes since baseline now equals current values
+      // (Content script is re-baselining in the background)
+      if (currentData) {
+        updateUI({
+          ...currentData,
+          dirty: []
+        });
+      }
     }
   } catch (err) {
     console.error('Failed to reapply changes:', err);
@@ -773,8 +804,9 @@ elements.reapplyChanges.addEventListener('click', reapplyChanges);
 
 chrome.runtime.onMessage.addListener((message) => {
   if (message.type === 'FIELDS_UPDATE') {
-    // After Clear, ignore incoming updates to prevent phantom rows from racing
-    if (justCleared) {
+    // After Clear, ignore ALL incoming updates to prevent resurrection
+    // This is critical for the Keep→Reload→Reapply→Clear sequence
+    if (isCleared()) {
       return;
     }
     
@@ -786,7 +818,8 @@ chrome.runtime.onMessage.addListener((message) => {
     if (data.dirty?.length > 0) {
       isShowingRestoredData = false;
       formLooksReset = false;
-      if (persistEnabled) {
+      // Only save to storage if persist is ON and we're not in cleared state
+      if (persistEnabled && !isCleared()) {
         persistedData = { dirty: data.dirty };
         saveDetections(data, currentFingerprint);
       }
