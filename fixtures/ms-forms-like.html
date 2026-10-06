@@ -278,20 +278,22 @@
   <div class="form-container">
     <div class="test-info">
       <strong>🧪 Microsoft Forms-like Test Fixture</strong>
-      This page mimics Microsoft Forms' DOM structure. The extension MUST strip type suffixes from labels.
+      This page mimics Microsoft Forms' DOM structure. The extension MUST strip type + points suffixes.
       <br><br>
       <strong>✅ Label stripping test cases:</strong>
       <ul style="margin-top: 8px; padding-left: 20px;">
-        <li><code>"What is your name ?Multi Line Text."</code> → must show <strong>"What is your name ?"</strong> only</li>
-        <li><code>"What is your email address?Single Line Text"</code> → must show <strong>"What is your email address?"</strong> only</li>
-        <li><code>"Which class are you in?Choice"</code> → must show <strong>"Which class are you in?"</strong> only</li>
-        <li>Type text appears ONLY via info icon tooltip (ℹ️), never in field label</li>
+        <li><code>"He goes ....................every month.Single choice. (1 Point)"</code><br>→ must show <strong>"He goes ....................every month."</strong> only</li>
+        <li><code>"What is your name ?Multi Line Text."</code> → must show <strong>"What is your name ?"</strong></li>
+        <li><code>"Rate this course.Rating (2 Points)"</code> → must show <strong>"Rate this course."</strong></li>
+        <li>Type appears ONLY via info icon (ℹ️) tooltip — hover to see it</li>
+        <li>Tooltip must appear ABOVE the icon, not below</li>
       </ul>
       <br>
-      <strong>❌ Should NOT show:</strong>
+      <strong>❌ Should NOT show in Field column:</strong>
       <ul style="margin-top: 8px; padding-left: 20px;">
-        <li>"Multi Line Text", "Single Line Text", "Choice", "Text", "Rating", etc. in field column</li>
-        <li>Option values like "Three by one" as field name (belongs in Was/Now only)</li>
+        <li>"Single choice", "Multi Line Text", "Choice", "Text", "Rating", etc.</li>
+        <li>"(1 Point)", "(2 Points)", or any points suffix</li>
+        <li>Option values like "Three by one" (belongs in Was/Now only)</li>
       </ul>
     </div>
     
@@ -343,6 +345,62 @@
                  name="student_id"
                  aria-label="Enter your student IDText"
                  value="STU-12345">
+        </div>
+        
+        <!-- Question 2c: Ali's exact failing case - type + points suffix -->
+        <div class="office-form-question" data-question-type="choice">
+          <div class="office-form-question-title">
+            <span class="question-title-box">He goes ....................every month.</span>
+          </div>
+          <div class="question-type-indicator">Single choice. (1 Point)</div>
+          <div class="office-form-question-choices" role="radiogroup">
+            <label class="office-form-choice-container">
+              <input type="radio" name="fill_in_blank" value="to shopping"
+                     aria-label="He goes ....................every month.Single choice. (1 Point)">
+              <span class="office-form-choice-label">to shopping</span>
+            </label>
+            <label class="office-form-choice-container">
+              <input type="radio" name="fill_in_blank" value="shopping" checked>
+              <span class="office-form-choice-label">shopping</span>
+            </label>
+            <label class="office-form-choice-container">
+              <input type="radio" name="fill_in_blank" value="for shopping">
+              <span class="office-form-choice-label">for shopping</span>
+            </label>
+          </div>
+        </div>
+        
+        <!-- Question 2d: Rating with points -->
+        <div class="office-form-question" data-question-type="rating">
+          <div class="office-form-question-title">
+            <span class="question-title-box">Rate this course.</span>
+          </div>
+          <div class="question-type-indicator">Rating (2 Points)</div>
+          <div class="office-form-rating" role="radiogroup">
+            <div class="rating-options">
+              <label class="rating-option">
+                <input type="radio" name="course_rating_points" value="1"
+                       aria-label="Rate this course.Rating (2 Points)">
+                <span class="rating-option-label">1</span>
+              </label>
+              <label class="rating-option">
+                <input type="radio" name="course_rating_points" value="2">
+                <span class="rating-option-label">2</span>
+              </label>
+              <label class="rating-option">
+                <input type="radio" name="course_rating_points" value="3" checked>
+                <span class="rating-option-label">3</span>
+              </label>
+              <label class="rating-option">
+                <input type="radio" name="course_rating_points" value="4">
+                <span class="rating-option-label">4</span>
+              </label>
+              <label class="rating-option">
+                <input type="radio" name="course_rating_points" value="5">
+                <span class="rating-option-label">5</span>
+              </label>
+            </div>
+          </div>
         </div>
         
         <!-- Question 3: Radio choice - color -->

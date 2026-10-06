@@ -56,12 +56,12 @@ function createTypeInfoIcon(type) {
   
   const wrapper = document.createElement('span');
   wrapper.className = 'field-type-icon';
-  wrapper.setAttribute('title', label);
+  wrapper.setAttribute('data-tooltip', label);
   wrapper.setAttribute('aria-label', `Field type: ${label}`);
   wrapper.setAttribute('role', 'img');
   wrapper.setAttribute('tabindex', '0');
   
-  wrapper.innerHTML = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none">${INFO_ICON_SVG}</svg>`;
+  wrapper.innerHTML = `<svg viewBox="0 0 24 24" width="12" height="12" fill="none">${INFO_ICON_SVG}</svg>`;
   
   return wrapper;
 }
@@ -130,8 +130,17 @@ function updateUI(data) {
   elements.changesBody.innerHTML = '';
   
   if (hasChanges) {
+    let rowNum = 0;
     for (const field of data.dirty) {
+      rowNum++;
       const row = document.createElement('tr');
+      
+      const numCell = document.createElement('td');
+      numCell.className = 'row-number-cell';
+      const numSpan = document.createElement('span');
+      numSpan.className = 'row-number';
+      numSpan.textContent = rowNum;
+      numCell.appendChild(numSpan);
       
       const labelCell = document.createElement('td');
       const labelWrapper = document.createElement('div');
@@ -165,6 +174,7 @@ function updateUI(data) {
       nowSpan.addEventListener('click', () => copyValue(field.now, 'Current value'));
       nowCell.appendChild(nowSpan);
       
+      row.appendChild(numCell);
       row.appendChild(labelCell);
       row.appendChild(wasCell);
       row.appendChild(nowCell);

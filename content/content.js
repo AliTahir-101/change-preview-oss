@@ -36,24 +36,33 @@
     'required', 'optional'
   ]);
   
+  const TYPE_WORDS = [
+    'multi[- ]?line\\s*text', 'single[- ]?line\\s*text', 'multiline', 'singleline',
+    'short\\s*(text|answer)', 'long\\s*(text|answer)',
+    'multiple\\s*choice', 'single\\s*choice', 'choice',
+    'check\\s*box(es)?', 'radio\\s*button(s)?', 'radio',
+    'drop[- ]?down', 'dropdown', 'selection', 'select',
+    'date(\\s*(and|&)?\\s*time)?', 'date\\s*picker', 'time', 'datetime',
+    'number', 'numeric', 'integer', 'decimal',
+    'email(\\s*address)?', 'phone(\\s*number)?', 'telephone',
+    'star\\s*rating', 'rating', 'likert(\\s*scale)?',
+    'ranking', 'rank', 'order',
+    'file(\\s*upload)?', 'attachment', 'upload',
+    'section(\\s*header)?', 'heading',
+    'text\\s*(box|field|area)?', 'textarea', 'textbox', 'input',
+    'net\\s*promoter\\s*score', 'nps',
+    'required', 'optional', 'text'
+  ].join('|');
+  
   const TYPE_SUFFIX_PATTERN = new RegExp(
-    '\\s*[.·•\\-–—|:,;]?\\s*(' +
-    'multi[- ]?line\\s*text|single[- ]?line\\s*text|' +
-    'short\\s*(text|answer)|long\\s*(text|answer)|' +
-    'multiple\\s*choice|single\\s*choice|choice|' +
-    'check\\s*box(es)?|radio\\s*button(s)?|radio|' +
-    'drop[- ]?down|dropdown|selection|select|' +
-    'date(\\s*(and|&)\\s*time)?|date\\s*picker|time|datetime|' +
-    'number|numeric|integer|decimal|' +
-    'email(\\s*address)?|phone(\\s*number)?|telephone|' +
-    'star\\s*rating|rating|likert(\\s*scale)?|' +
-    'ranking|rank|order|' +
-    'file(\\s*upload)?|attachment|upload|' +
-    'section(\\s*header)?|heading|' +
-    'text\\s*(box|field|area)?|textarea|textbox|input|' +
-    'net\\s*promoter\\s*score|nps|' +
-    'required|optional|text' +
-    ')\\s*\\.?\\s*$',
+    '[.·•\\-–—|:,;\\s]*(' + TYPE_WORDS + ')[.·•\\-–—|:,;\\s]*$',
+    'i'
+  );
+  
+  const POINTS_SUFFIX_PATTERN = /[.·•\-–—|:,;\s]*\(?\s*\d+\s*points?\s*\)?[.\s]*$/i;
+  
+  const GLUED_TYPE_PATTERN = new RegExp(
+    '\\.(' + TYPE_WORDS + ')[\\.\\s]*$',
     'i'
   );
 
@@ -88,10 +97,18 @@
   function stripTypeSuffix(text) {
     if (!text) return text;
     let cleaned = text.trim();
+    let prevLength;
     
-    cleaned = cleaned.replace(TYPE_SUFFIX_PATTERN, '');
-    cleaned = cleaned.replace(/\s*[.·•\-–—|:,;]\s*$/, '');
-    cleaned = cleaned.trim();
+    do {
+      prevLength = cleaned.length;
+      
+      cleaned = cleaned.replace(POINTS_SUFFIX_PATTERN, '');
+      cleaned = cleaned.replace(TYPE_SUFFIX_PATTERN, '');
+      cleaned = cleaned.replace(GLUED_TYPE_PATTERN, '.');
+      cleaned = cleaned.replace(/[·•\-–—|:,;\s]+$/, '');
+      cleaned = cleaned.trim();
+      
+    } while (cleaned.length < prevLength && cleaned.length > 0);
     
     if (cleaned.length === 0) {
       return text.trim();
@@ -106,6 +123,9 @@
     cleaned = cleaned.replace(/\s+/g, ' ').trim();
     cleaned = cleaned.replace(/^\*\s*/, '');
     cleaned = cleaned.replace(/\s*\*$/, '');
+    
+    cleaned = cleaned.replace(/\.{2,}\s*$/, match => match.trimEnd());
+    
     return cleaned;
   }
   
