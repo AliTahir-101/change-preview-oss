@@ -57,8 +57,13 @@ let panelClearedSession = false;
  */
 let clearedPageKey = null;
 
+/**
+ * Check if we're in the short-term cleared window (5 seconds after Clear).
+ * This blocks stale updates from Reapply, but does NOT block real new edits.
+ * panelClearedSession is checked separately to control storage saves.
+ */
 function isCleared() {
-  return Date.now() < clearedUntil || panelClearedSession;
+  return Date.now() < clearedUntil;
 }
 
 function setClearedFor(ms) {
@@ -916,28 +921,33 @@ elements.reapplyChanges.addEventListener('click', reapplyChanges);
 
 chrome.runtime.onMessage.addListener(async (message) => {
   if (message.type === 'FIELDS_UPDATE') {
-    // After Clear, ignore ALL incoming updates to prevent resurrection
-    if (isCleared()) {
+    const data = message.data;
+    const hasDirtyData = data.dirty?.length > 0;
+    
+    // During the short-term cleared window (5s), only accept updates with real dirty data
+    // This blocks stale empty updates but allows real new edits through
+    if (isCleared() && !hasDirtyData) {
       return;
     }
     
-    const data = message.data;
     const fieldKeys = (data.dirty || []).map(f => f.key);
     const allFieldKeys = data.allFieldKeys || fieldKeys;
     currentFingerprint = createFingerprint(data.host, data.path, allFieldKeys);
     
-    if (data.dirty?.length > 0) {
-      // This is real live changes - check if we need to clear the marker
+    if (hasDirtyData) {
+      // Real dirty data = user made an edit
+      // If we're in cleared session, this is the first edit after Clear
       if (panelClearedSession) {
-        // First real edit after Clear - remove marker, allow saving
+        // Remove the cleared marker, unlock saves
         await removePageClearedMarker(data.host, data.path);
+        // panelClearedSession is now false (set by removePageClearedMarker)
       }
       
       isShowingRestoredData = false;
       formLooksReset = false;
       
-      // Only save to storage if persist is ON and we're not in cleared state
-      if (persistEnabled && !panelClearedSession) {
+      // Save to storage if persist is ON (panelClearedSession was just reset above)
+      if (persistEnabled) {
         persistedData = { dirty: data.dirty };
         saveDetections(data, currentFingerprint);
       }

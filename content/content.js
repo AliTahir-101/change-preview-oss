@@ -1055,12 +1055,24 @@
      * Do NOT reset if applyingChanges is true (programmatic input from Reapply).
      * This is what allows new detections after Clear.
      */
+    /**
+     * Handle real user input to unlock detection after Clear.
+     * 
+     * CRITICAL: Do NOT call snapshotBaseline() here!
+     * By the time this handler runs, the field value has ALREADY changed.
+     * If we re-baseline now, we'd capture the new value as baseline,
+     * making getDirtyFields() return empty (new == baseline).
+     * 
+     * The baseline was set during CLEAR_BASELINE to the form state at that moment.
+     * We just need to reset clearedSession so getDirtyFields() starts working again.
+     * The user's edit will then be detected as a diff vs the Clear-time baseline.
+     */
     function handleUserInput(e) {
       // Only reset clearedSession on real user input, not programmatic changes
       if (clearedSession && !applyingChanges && e.isTrusted) {
         clearedSession = false;
-        // Re-baseline from current values so this edit is the first dirty entry
-        snapshotBaseline(true);
+        // DO NOT re-baseline here - baseline stays from Clear time
+        // This edit will be the first dirty row vs that baseline
       }
       debouncedUpdate();
     }
