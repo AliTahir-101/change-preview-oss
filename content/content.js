@@ -1011,6 +1011,147 @@
     });
   }
 
+  /**
+   * Apply stored "Now" values to matching fields.
+   * Match strategy: uses the same field key system as tracking:
+   * - name:fieldName — matches by form field name attribute
+   * - id:fieldId — matches by element id
+   * - path:css>path — matches by DOM path (less reliable after page changes)
+   * Only applies when we have high confidence match. Skips if:
+   * - Field not found
+   * - Field type incompatible (e.g., select without matching option)
+   * - Field is password/sensitive (already filtered in tracking)
+   */
+  function applyChanges(changes) {
+    const results = { applied: 0, failed: 0, total: changes.length, failures: [] };
+    
+    for (const change of changes) {
+      const success = applyOneChange(change);
+      if (success) {
+        results.applied++;
+      } else {
+        results.failed++;
+        results.failures.push(change.label || change.key);
+      }
+    }
+    
+    return results;
+  }
+  
+  function applyOneChange(change) {
+    const el = findFieldByKey(change.key);
+    if (!el) return false;
+    
+    if (shouldSkipField(el)) return false;
+    
+    try {
+      return setFieldValue(el, change.now, change.type);
+    } catch (err) {
+      console.error('Failed to apply change:', change.key, err);
+      return false;
+    }
+  }
+  
+  function findFieldByKey(key) {
+    if (!key) return null;
+    
+    if (key.startsWith('name:')) {
+      const name = key.slice(5);
+      return document.querySelector(`[name="${CSS.escape(name)}"]`);
+    }
+    
+    if (key.startsWith('id:')) {
+      const id = key.slice(3);
+      return document.getElementById(id);
+    }
+    
+    if (key.startsWith('path:')) {
+      try {
+        const path = key.slice(5);
+        return document.querySelector(path);
+      } catch {
+        return null;
+      }
+    }
+    
+    if (key.startsWith('checkbox-group:')) {
+      return null;
+    }
+    
+    return null;
+  }
+  
+  function setFieldValue(el, value, type) {
+    const tag = el.tagName.toLowerCase();
+    
+    if (tag === 'input') {
+      if (el.type === 'checkbox') {
+        const shouldCheck = value === 'Checked' || value === true;
+        if (el.checked !== shouldCheck) {
+          el.checked = shouldCheck;
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+        return true;
+      }
+      
+      if (el.type === 'radio') {
+        const radios = document.querySelectorAll(`input[name="${CSS.escape(el.name)}"]`);
+        for (const radio of radios) {
+          const optionLabel = getRadioOptionLabel(radio);
+          if (optionLabel === value || radio.value === value) {
+            radio.checked = true;
+            radio.dispatchEvent(new Event('change', { bubbles: true }));
+            return true;
+          }
+        }
+        return false;
+      }
+      
+      el.value = value || '';
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+      return true;
+    }
+    
+    if (tag === 'select') {
+      if (el.multiple) {
+        const values = (value || '').split(', ');
+        let anyMatched = false;
+        for (const opt of el.options) {
+          const shouldSelect = values.includes(opt.text) || values.includes(opt.value);
+          opt.selected = shouldSelect;
+          if (shouldSelect) anyMatched = true;
+        }
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        return anyMatched;
+      } else {
+        for (const opt of el.options) {
+          if (opt.text === value || opt.value === value) {
+            el.value = opt.value;
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+            return true;
+          }
+        }
+        return false;
+      }
+    }
+    
+    if (tag === 'textarea') {
+      el.value = value || '';
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+      return true;
+    }
+    
+    if (el.isContentEditable) {
+      el.innerText = value || '';
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      return true;
+    }
+    
+    return false;
+  }
+
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     switch (message.type) {
       case 'GET_FIELDS':
@@ -1035,6 +1176,11 @@
       case 'SET_INTERCEPT':
         saveInterceptEnabled = message.enabled;
         sendResponse({ success: true });
+        break;
+        
+      case 'APPLY_CHANGES':
+        const results = applyChanges(message.changes || []);
+        sendResponse(results);
         break;
         
       default:

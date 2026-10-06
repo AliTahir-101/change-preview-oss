@@ -14,6 +14,8 @@ const elements = {
   copyMarkdown: document.getElementById('copyMarkdown'),
   copyCsv: document.getElementById('copyCsv'),
   downloadCsv: document.getElementById('downloadCsv'),
+  persistToggle: document.getElementById('persistToggle'),
+  applyChanges: document.getElementById('applyChanges'),
   clearDetections: document.getElementById('clearDetections'),
   confirmDialog: document.getElementById('confirmDialog'),
   confirmCancel: document.getElementById('confirmCancel'),
@@ -28,6 +30,8 @@ const COLLAPSE_ICON_SVG = '<path d="M18 15l-6-6-6 6" stroke="currentColor" strok
 const LONG_VALUE_THRESHOLD = 60;
 
 let currentData = null;
+let persistEnabled = false;
+let currentPageKey = null;
 
 const TYPE_LABELS = {
   'text': 'Text',
@@ -324,7 +328,14 @@ async function refreshData() {
     
     const response = await chrome.tabs.sendMessage(tab.id, { type: 'GET_FIELDS' });
     if (response) {
+      currentPageKey = getPageKey(response.host, response.path);
       updateUI(response);
+      
+      if (persistEnabled && response.dirty?.length > 0) {
+        await saveDetections(response);
+      }
+      
+      await updateApplyButtonState();
     }
   } catch (err) {
     console.error('Failed to get fields:', err);
@@ -334,6 +345,7 @@ async function refreshData() {
       dirty: [],
       coverage: { tracked: 0, total: 0, skipped: 0 }
     });
+    elements.applyChanges.disabled = true;
   }
 }
 
@@ -345,18 +357,127 @@ function hideConfirmDialog() {
   elements.confirmDialog.classList.add('hidden');
 }
 
+function getPageKey(host, path) {
+  return `detections:${host}${path}`;
+}
+
+async function loadPersistedDetections() {
+  if (!currentPageKey) return null;
+  try {
+    const result = await chrome.storage.session.get(currentPageKey);
+    return result[currentPageKey] || null;
+  } catch (err) {
+    console.error('Failed to load persisted detections:', err);
+    return null;
+  }
+}
+
+async function saveDetections(data) {
+  if (!persistEnabled || !currentPageKey || !data?.dirty?.length) return;
+  try {
+    const toStore = {
+      host: data.host,
+      path: data.path,
+      dirty: data.dirty.map(f => ({
+        key: f.key,
+        label: f.label,
+        type: f.type,
+        was: f.was,
+        now: f.now
+      })),
+      savedAt: Date.now()
+    };
+    await chrome.storage.session.set({ [currentPageKey]: toStore });
+  } catch (err) {
+    console.error('Failed to save detections:', err);
+  }
+}
+
+async function clearPersistedDetections() {
+  if (!currentPageKey) return;
+  try {
+    await chrome.storage.session.remove(currentPageKey);
+  } catch (err) {
+    console.error('Failed to clear persisted detections:', err);
+  }
+}
+
+async function loadPersistSetting() {
+  try {
+    const result = await chrome.storage.local.get('persistEnabled');
+    persistEnabled = result.persistEnabled || false;
+    elements.persistToggle.checked = persistEnabled;
+  } catch (err) {
+    console.error('Failed to load persist setting:', err);
+  }
+}
+
+async function savePersistSetting(enabled) {
+  try {
+    await chrome.storage.local.set({ persistEnabled: enabled });
+    persistEnabled = enabled;
+    if (!enabled && currentPageKey) {
+      await clearPersistedDetections();
+    }
+  } catch (err) {
+    console.error('Failed to save persist setting:', err);
+  }
+}
+
 async function clearDetections() {
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab?.id) return;
     
+    await clearPersistedDetections();
     await chrome.tabs.sendMessage(tab.id, { type: 'CLEAR_BASELINE' });
     showToast('Detections cleared');
+    elements.applyChanges.disabled = true;
     await refreshData();
   } catch (err) {
     console.error('Failed to clear detections:', err);
     showToast('Failed to clear');
   }
+}
+
+async function applyChanges() {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.id) return;
+    
+    const persisted = await loadPersistedDetections();
+    if (!persisted?.dirty?.length) {
+      showToast('No changes to apply');
+      return;
+    }
+    
+    const response = await chrome.tabs.sendMessage(tab.id, {
+      type: 'APPLY_CHANGES',
+      changes: persisted.dirty
+    });
+    
+    if (response) {
+      const { applied, failed, total } = response;
+      if (failed > 0) {
+        showToast(`Applied ${applied} of ${total} (${failed} failed)`);
+      } else {
+        showToast(`Applied ${applied} change${applied === 1 ? '' : 's'}`);
+      }
+      await refreshData();
+    }
+  } catch (err) {
+    console.error('Failed to apply changes:', err);
+    showToast('Failed to apply');
+  }
+}
+
+async function updateApplyButtonState() {
+  if (!persistEnabled) {
+    elements.applyChanges.disabled = true;
+    return;
+  }
+  const persisted = await loadPersistedDetections();
+  elements.applyChanges.disabled = !persisted?.dirty?.length;
 }
 
 function generateFilename() {
@@ -404,18 +525,39 @@ elements.confirmClear.addEventListener('click', () => {
   clearDetections();
 });
 
+elements.persistToggle.addEventListener('change', (e) => {
+  savePersistSetting(e.target.checked);
+  updateApplyButtonState();
+});
+
+elements.applyChanges.addEventListener('click', applyChanges);
+
 chrome.runtime.onMessage.addListener((message) => {
   if (message.type === 'FIELDS_UPDATE') {
     updateUI(message.data);
+    if (persistEnabled && message.data?.dirty?.length > 0) {
+      saveDetections(message.data);
+    }
   }
 });
 
-chrome.tabs.onActivated.addListener(refreshData);
-chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+chrome.tabs.onActivated.addListener(async () => {
+  await refreshData();
+  await updateApplyButtonState();
+});
+
+chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
   if (changeInfo.status === 'complete') {
-    refreshData();
+    await refreshData();
+    await updateApplyButtonState();
   }
 });
 
-refreshData();
+async function init() {
+  await loadPersistSetting();
+  await refreshData();
+  await updateApplyButtonState();
+}
+
+init();
 setInterval(refreshData, 2000);
