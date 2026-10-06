@@ -19,6 +19,36 @@ const elements = {
 
 let currentData = null;
 
+const TYPE_INFO = {
+  'text': { icon: 'T', label: 'Text' },
+  'email': { icon: '@', label: 'Email' },
+  'number': { icon: '#', label: 'Number' },
+  'tel': { icon: '☎', label: 'Phone' },
+  'url': { icon: '🔗', label: 'URL' },
+  'date': { icon: '📅', label: 'Date' },
+  'time': { icon: '🕐', label: 'Time' },
+  'datetime-local': { icon: '📅', label: 'Date & Time' },
+  'month': { icon: '📅', label: 'Month' },
+  'week': { icon: '📅', label: 'Week' },
+  'color': { icon: '🎨', label: 'Color' },
+  'range': { icon: '⇔', label: 'Range' },
+  'search': { icon: '🔍', label: 'Search' },
+  'textarea': { icon: '¶', label: 'Multi-line text' },
+  'select': { icon: '▼', label: 'Dropdown' },
+  'select-one': { icon: '▼', label: 'Dropdown' },
+  'select-multiple': { icon: '☰', label: 'Multi-select' },
+  'radio': { icon: '◉', label: 'Choice' },
+  'checkbox': { icon: '☑', label: 'Checkbox' },
+  'checkbox-group': { icon: '☑', label: 'Checkboxes' },
+  'contenteditable': { icon: '✎', label: 'Rich text' }
+};
+
+function getTypeInfo(type) {
+  if (!type) return { icon: '?', label: 'Field' };
+  const normalized = type.toLowerCase();
+  return TYPE_INFO[normalized] || { icon: 'T', label: type.charAt(0).toUpperCase() + type.slice(1) };
+}
+
 function escapeHtml(str) {
   const div = document.createElement('div');
   div.textContent = str;
@@ -87,10 +117,25 @@ function updateUI(data) {
       const row = document.createElement('tr');
       
       const labelCell = document.createElement('td');
+      const labelWrapper = document.createElement('div');
+      labelWrapper.className = 'field-label-wrapper';
+      
       const labelSpan = document.createElement('span');
       labelSpan.className = 'field-label';
       labelSpan.textContent = field.label;
-      labelCell.appendChild(labelSpan);
+      labelWrapper.appendChild(labelSpan);
+      
+      const typeInfo = getTypeInfo(field.type);
+      const typeIcon = document.createElement('span');
+      typeIcon.className = 'field-type-icon';
+      typeIcon.textContent = typeInfo.icon;
+      typeIcon.setAttribute('title', typeInfo.label);
+      typeIcon.setAttribute('aria-label', `Field type: ${typeInfo.label}`);
+      typeIcon.setAttribute('role', 'img');
+      typeIcon.setAttribute('tabindex', '0');
+      labelWrapper.appendChild(typeIcon);
+      
+      labelCell.appendChild(labelWrapper);
       
       const wasCell = document.createElement('td');
       const wasSpan = document.createElement('span');

@@ -604,6 +604,7 @@
         dirty.push({
           key: field.key,
           label: field.label,
+          type: field.type,
           was: '(new field)',
           now: field.value
         });
@@ -611,6 +612,7 @@
         dirty.push({
           key: field.key,
           label: field.label,
+          type: field.type || original.type,
           was: original.value,
           now: field.value
         });
