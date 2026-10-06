@@ -50,14 +50,17 @@
     </main>
 
     <footer class="footer">
-      <div class="actions">
-        <button class="btn btn-primary" id="copyMarkdown" disabled>
+      <div class="export-actions">
+        <button class="btn btn-export" id="copyMarkdown" disabled>
           <span class="btn-icon">📋</span> Copy Markdown
         </button>
-        <button class="btn btn-secondary" id="copyCsv" disabled>
+        <button class="btn btn-export" id="downloadMarkdown" disabled>
+          <span class="btn-icon">⬇</span> Download Markdown
+        </button>
+        <button class="btn btn-export" id="copyCsv" disabled>
           <span class="btn-icon">📄</span> Copy CSV
         </button>
-        <button class="btn btn-secondary" id="downloadCsv" disabled>
+        <button class="btn btn-export" id="downloadCsv" disabled>
           <span class="btn-icon">⬇</span> Download CSV
         </button>
       </div>
@@ -67,12 +70,12 @@
         </button>
       </div>
       <div class="footer-bottom">
-        <div class="privacy-note">
-          <span class="lock-icon">🔒</span> Local only · passwords skipped
-        </div>
         <button class="btn btn-danger-text" id="clearDetections">
           <span class="btn-icon">🗑</span> Clear detections
         </button>
+      </div>
+      <div class="footer-disclaimer">
+        <span class="lock-icon">🔒</span> ChangePreview stores everything locally in your browser. Nothing is uploaded.
       </div>
     </footer>
     

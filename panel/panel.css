@@ -441,11 +441,30 @@ body {
   background: var(--bg-secondary);
 }
 
-.actions {
+.export-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  justify-content: center;
+  gap: 6px;
   margin-bottom: 10px;
+}
+
+.btn-export {
+  background: var(--bg);
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  font-size: 11px;
+  padding: 5px 8px;
+}
+
+.btn-export:hover:not(:disabled) {
+  background: var(--bg-secondary);
+  color: var(--text);
+  border-color: var(--text-muted);
+}
+
+.btn-export:disabled {
+  opacity: 0.4;
 }
 
 .reapply-row {
@@ -482,7 +501,7 @@ body {
 
 .footer-bottom {
   display: flex;
-  justify-content: space-between;
+  justify-content: center;
   align-items: center;
 }
 
@@ -563,16 +582,18 @@ body {
   background: var(--danger-bg);
 }
 
-.privacy-note {
-  font-size: 11px;
+.footer-disclaimer {
+  font-size: 10px;
   color: var(--text-muted);
-  display: flex;
-  align-items: center;
-  gap: 4px;
+  text-align: center;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  margin-top: 8px;
 }
 
-.lock-icon {
-  font-size: 10px;
+.footer-disclaimer .lock-icon {
+  font-size: 9px;
+  margin-right: 2px;
 }
 
 .confirm-dialog {

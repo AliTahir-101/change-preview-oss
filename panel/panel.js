@@ -12,6 +12,7 @@ const elements = {
   changesTable: document.getElementById('changesTable'),
   changesBody: document.getElementById('changesBody'),
   copyMarkdown: document.getElementById('copyMarkdown'),
+  downloadMarkdown: document.getElementById('downloadMarkdown'),
   copyCsv: document.getElementById('copyCsv'),
   downloadCsv: document.getElementById('downloadCsv'),
   persistToggle: document.getElementById('persistToggle'),
@@ -145,6 +146,7 @@ function updateUI(data) {
   elements.emptyState.classList.toggle('hidden', hasChanges);
   elements.changesTable.classList.toggle('hidden', !hasChanges);
   elements.copyMarkdown.disabled = !hasChanges;
+  elements.downloadMarkdown.disabled = !hasChanges;
   elements.copyCsv.disabled = !hasChanges;
   elements.downloadCsv.disabled = !hasChanges;
   
@@ -698,11 +700,11 @@ function updateReapplyVisibility() {
 }
 
 
-function generateFilename() {
+function generateFilename(ext = 'csv') {
   const now = new Date();
   const date = now.toISOString().split('T')[0];
   const host = currentData?.host?.replace(/[^a-zA-Z0-9]/g, '-') || 'page';
-  return `change-preview-${host}-${date}.csv`;
+  return `change-preview-${host}-${date}.${ext}`;
 }
 
 function downloadCsv() {
@@ -713,7 +715,7 @@ function downloadCsv() {
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
-  link.download = generateFilename();
+  link.download = generateFilename('csv');
   link.style.display = 'none';
   document.body.appendChild(link);
   link.click();
@@ -722,10 +724,29 @@ function downloadCsv() {
   showToast('CSV downloaded');
 }
 
+function downloadMarkdown() {
+  const md = generateMarkdown();
+  if (!md) return;
+  
+  const blob = new Blob([md], { type: 'text/markdown;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = generateFilename('md');
+  link.style.display = 'none';
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+  showToast('Markdown downloaded');
+}
+
 elements.copyMarkdown.addEventListener('click', () => {
   const md = generateMarkdown();
   if (md) copyToClipboard(md, 'Markdown');
 });
+
+elements.downloadMarkdown.addEventListener('click', downloadMarkdown);
 
 elements.copyCsv.addEventListener('click', () => {
   const csv = generateCsv();
