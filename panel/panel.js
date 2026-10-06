@@ -31,6 +31,7 @@ const COLLAPSE_ICON_SVG = '<path d="M18 15l-6-6-6 6" stroke="currentColor" strok
 
 const LONG_VALUE_THRESHOLD = 60;
 const STORAGE_PREFIX = 'cp_detections:';
+const CLEARED_PREFIX = 'cp_cleared:';
 
 let currentData = null;
 let persistEnabled = false;
@@ -40,18 +41,81 @@ let isShowingRestoredData = false;
 let formLooksReset = false;
 
 /**
- * Timestamp until which Clear is in effect.
- * During this window: no storage saves, no storage loads, no UI updates from stale data.
- * This prevents the "resurrection" bug where detections reappear after Clear.
+ * Timestamp until which Clear is in effect (short-term protection).
  */
 let clearedUntil = 0;
 
+/**
+ * Panel-side cleared session flag. Mirrors content script's clearedSession.
+ * Set to true after Clear, prevents any restore from storage.
+ * Reset to false on first real dirty detection from content script.
+ */
+let panelClearedSession = false;
+
+/**
+ * The host+path that was cleared. Used to check the persistent marker.
+ */
+let clearedPageKey = null;
+
 function isCleared() {
-  return Date.now() < clearedUntil;
+  return Date.now() < clearedUntil || panelClearedSession;
 }
 
 function setClearedFor(ms) {
   clearedUntil = Date.now() + ms;
+}
+
+/**
+ * Get the cleared marker key for a host/path.
+ */
+function getClearedMarkerKey(host, path) {
+  const normalizedPath = (path || '/').replace(/\/+$/, '') || '/';
+  return CLEARED_PREFIX + host + normalizedPath;
+}
+
+/**
+ * Check if a page has a cleared marker (survives panel reload).
+ */
+async function hasPageClearedMarker(host, path) {
+  if (!host) return false;
+  try {
+    const key = getClearedMarkerKey(host, path);
+    const result = await chrome.storage.local.get(key);
+    return !!result[key]?.untilEdit;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Set the cleared marker for a page.
+ */
+async function setPageClearedMarker(host, path) {
+  if (!host) return;
+  try {
+    const key = getClearedMarkerKey(host, path);
+    await chrome.storage.local.set({ 
+      [key]: { clearedAt: Date.now(), untilEdit: true } 
+    });
+    clearedPageKey = key;
+  } catch (err) {
+    console.error('Failed to set cleared marker:', err);
+  }
+}
+
+/**
+ * Remove the cleared marker for a page (on first real edit).
+ */
+async function removePageClearedMarker(host, path) {
+  if (!host) return;
+  try {
+    const key = getClearedMarkerKey(host, path);
+    await chrome.storage.local.remove(key);
+    clearedPageKey = null;
+    panelClearedSession = false;
+  } catch (err) {
+    console.error('Failed to remove cleared marker:', err);
+  }
 }
 
 const TYPE_LABELS = {
@@ -360,7 +424,15 @@ async function refreshData() {
       
       const liveHasChanges = response.dirty?.length > 0;
       
+      // Check for persistent cleared marker - NEVER restore if page was cleared
+      const pageCleared = await hasPageClearedMarker(response.host, response.path);
+      
       if (persistEnabled && liveHasChanges) {
+        // Real live changes detected - this is a new edit session
+        if (pageCleared || panelClearedSession) {
+          // First real edit after Clear - remove the marker, allow saving
+          await removePageClearedMarker(response.host, response.path);
+        }
         currentFingerprint = newFingerprint;
         await saveDetections(response, currentFingerprint);
         persistedData = { dirty: response.dirty, fingerprint: currentFingerprint };
@@ -368,7 +440,8 @@ async function refreshData() {
         formLooksReset = false;
       }
       
-      if (persistEnabled && !liveHasChanges && !isCleared()) {
+      // CRITICAL: Never restore from storage if page was cleared
+      if (persistEnabled && !liveHasChanges && !isCleared() && !pageCleared && !panelClearedSession) {
         let persisted = await loadPersistedDetections(newFingerprint);
         if (!persisted) {
           const fallback = await loadPersistedByHostPath(response.host, response.path);
@@ -404,12 +477,18 @@ async function refreshData() {
   } catch (err) {
     console.error('Failed to get fields:', err);
     
-    if (isCleared()) return;
+    // Don't restore from storage if cleared
+    if (isCleared() || panelClearedSession) return;
     
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (tab?.url && persistEnabled) {
       try {
         const url = new URL(tab.url);
+        
+        // Check for cleared marker before loading
+        const pageCleared = await hasPageClearedMarker(url.host, url.pathname);
+        if (pageCleared) return;
+        
         const fallback = await loadPersistedByHostPath(url.host, url.pathname);
         if (fallback?.data?.dirty?.length > 0) {
           persistedData = fallback.data;
@@ -531,32 +610,69 @@ async function saveDetections(data, fingerprint) {
   }
 }
 
+/**
+ * Aggressively clear ALL detection storage keys for a page.
+ * Uses multiple matching strategies to ensure no leftovers:
+ * 1. Current fingerprint key
+ * 2. Keys with matching prefix (host + normalized path)
+ * 3. Keys where stored value.host/value.path match this page
+ * 4. Set persistent cleared marker
+ */
 async function clearPersistedDetections(host, path) {
   try {
     const keysToRemove = [];
+    const normalizedPath = (path || '/').replace(/\/+$/, '') || '/';
     
+    // Strategy 1: Current fingerprint
     if (currentFingerprint) {
       keysToRemove.push(getStorageKey(currentFingerprint));
     }
     
+    // Get all storage
+    const all = await chrome.storage.local.get(null);
+    
     if (host) {
-      const normalizedPath = (path || '/').replace(/\/+$/, '') || '/';
-      const prefix = STORAGE_PREFIX + host + normalizedPath;
-      const all = await chrome.storage.local.get(null);
+      // Strategy 2: Key prefix matching (host + path variations)
+      const prefixes = [
+        STORAGE_PREFIX + host + normalizedPath,
+        STORAGE_PREFIX + host + path,  // Original path
+        STORAGE_PREFIX + host + normalizedPath.toLowerCase(),
+      ];
       
-      for (const key of Object.keys(all)) {
-        if (key.startsWith(prefix) && !keysToRemove.includes(key)) {
+      for (const [key, value] of Object.entries(all)) {
+        if (!key.startsWith(STORAGE_PREFIX)) continue;
+        if (keysToRemove.includes(key)) continue;
+        
+        // Check prefix match
+        const matchesPrefix = prefixes.some(p => key.startsWith(p));
+        
+        // Strategy 3: Value match (stored host/path)
+        const valueHost = value?.host || '';
+        const valuePath = (value?.path || '/').replace(/\/+$/, '') || '/';
+        const matchesValue = valueHost === host && valuePath === normalizedPath;
+        
+        // Strategy 4: Host-only match with path similarity
+        const matchesHost = valueHost === host && key.includes(normalizedPath);
+        
+        if (matchesPrefix || matchesValue || matchesHost) {
           keysToRemove.push(key);
         }
       }
     }
     
+    // Remove all matched keys
     if (keysToRemove.length > 0) {
       await chrome.storage.local.remove(keysToRemove);
     }
     
+    // Set persistent cleared marker for this page
+    await setPageClearedMarker(host, normalizedPath);
+    
+    // Clear memory
     persistedData = null;
     currentFingerprint = null;
+    panelClearedSession = true;
+    
   } catch (err) {
     console.error('Failed to clear persisted detections:', err);
   }
@@ -798,10 +914,9 @@ elements.persistToggle.addEventListener('change', (e) => {
 
 elements.reapplyChanges.addEventListener('click', reapplyChanges);
 
-chrome.runtime.onMessage.addListener((message) => {
+chrome.runtime.onMessage.addListener(async (message) => {
   if (message.type === 'FIELDS_UPDATE') {
     // After Clear, ignore ALL incoming updates to prevent resurrection
-    // This is critical for the Keep→Reload→Reapply→Clear sequence
     if (isCleared()) {
       return;
     }
@@ -812,10 +927,17 @@ chrome.runtime.onMessage.addListener((message) => {
     currentFingerprint = createFingerprint(data.host, data.path, allFieldKeys);
     
     if (data.dirty?.length > 0) {
+      // This is real live changes - check if we need to clear the marker
+      if (panelClearedSession) {
+        // First real edit after Clear - remove marker, allow saving
+        await removePageClearedMarker(data.host, data.path);
+      }
+      
       isShowingRestoredData = false;
       formLooksReset = false;
+      
       // Only save to storage if persist is ON and we're not in cleared state
-      if (persistEnabled && !isCleared()) {
+      if (persistEnabled && !panelClearedSession) {
         persistedData = { dirty: data.dirty };
         saveDetections(data, currentFingerprint);
       }
