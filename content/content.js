@@ -18,11 +18,44 @@
   const SAVE_BUTTON_CONTAINS = /(save|update|submit|apply|publish|confirm)\s*(changes?|settings?|form)?/i;
   
   const GENERIC_TYPE_STRINGS = new Set([
-    'text', 'multi-line text', 'multiline text', 'single line text',
-    'choice', 'multiple choice', 'checkbox', 'radio', 'dropdown',
-    'date', 'number', 'email', 'rating', 'likert', 'ranking',
-    'file upload', 'section', 'input', 'textarea', 'select'
+    'text', 'multi-line text', 'multiline text', 'multi line text',
+    'single-line text', 'single line text', 'singleline text',
+    'short text', 'long text', 'short answer', 'long answer',
+    'choice', 'multiple choice', 'single choice',
+    'checkbox', 'checkboxes', 'radio', 'radio button', 'radio buttons',
+    'dropdown', 'drop-down', 'drop down', 'select', 'selection',
+    'date', 'date picker', 'time', 'date and time', 'datetime',
+    'number', 'numeric', 'integer', 'decimal',
+    'email', 'email address', 'phone', 'phone number', 'telephone',
+    'rating', 'star rating', 'likert', 'likert scale',
+    'ranking', 'rank', 'order',
+    'file upload', 'file', 'attachment', 'upload',
+    'section', 'section header', 'heading',
+    'input', 'textarea', 'textbox', 'text box', 'text field',
+    'net promoter score', 'nps',
+    'required', 'optional'
   ]);
+  
+  const TYPE_SUFFIX_PATTERN = new RegExp(
+    '\\s*[.·•\\-–—|:,;]?\\s*(' +
+    'multi[- ]?line\\s*text|single[- ]?line\\s*text|' +
+    'short\\s*(text|answer)|long\\s*(text|answer)|' +
+    'multiple\\s*choice|single\\s*choice|choice|' +
+    'check\\s*box(es)?|radio\\s*button(s)?|radio|' +
+    'drop[- ]?down|dropdown|selection|select|' +
+    'date(\\s*(and|&)\\s*time)?|date\\s*picker|time|datetime|' +
+    'number|numeric|integer|decimal|' +
+    'email(\\s*address)?|phone(\\s*number)?|telephone|' +
+    'star\\s*rating|rating|likert(\\s*scale)?|' +
+    'ranking|rank|order|' +
+    'file(\\s*upload)?|attachment|upload|' +
+    'section(\\s*header)?|heading|' +
+    'text\\s*(box|field|area)?|textarea|textbox|input|' +
+    'net\\s*promoter\\s*score|nps|' +
+    'required|optional|text' +
+    ')\\s*\\.?\\s*$',
+    'i'
+  );
 
   let baseline = new Map();
   let radioGroupLabels = new Map();
@@ -50,6 +83,30 @@
   function isGenericTypeString(text) {
     if (!text) return false;
     return GENERIC_TYPE_STRINGS.has(text.toLowerCase().trim());
+  }
+  
+  function stripTypeSuffix(text) {
+    if (!text) return text;
+    let cleaned = text.trim();
+    
+    cleaned = cleaned.replace(TYPE_SUFFIX_PATTERN, '');
+    cleaned = cleaned.replace(/\s*[.·•\-–—|:,;]\s*$/, '');
+    cleaned = cleaned.trim();
+    
+    if (cleaned.length === 0) {
+      return text.trim();
+    }
+    
+    return cleaned;
+  }
+  
+  function cleanLabel(text) {
+    if (!text) return text;
+    let cleaned = stripTypeSuffix(text);
+    cleaned = cleaned.replace(/\s+/g, ' ').trim();
+    cleaned = cleaned.replace(/^\*\s*/, '');
+    cleaned = cleaned.replace(/\s*\*$/, '');
+    return cleaned;
   }
   
   function isValidLabelText(text) {
@@ -309,37 +366,39 @@
   }
 
   function getFieldLabel(el, isForGroup = false) {
+    let label = null;
+    
     if (el.type === 'radio' && !isForGroup) {
-      const groupLabel = getRadioGroupLabel(el);
-      if (groupLabel) return groupLabel;
+      label = getRadioGroupLabel(el);
+      if (label) return cleanLabel(label);
     }
     
     if (el.type === 'checkbox' && !isForGroup) {
-      const groupLabel = getCheckboxGroupLabel(el);
-      if (groupLabel) return groupLabel;
+      label = getCheckboxGroupLabel(el);
+      if (label) return cleanLabel(label);
     }
     
-    const questionLabel = getQuestionContainerLabel(el);
-    if (questionLabel) return questionLabel;
+    label = getQuestionContainerLabel(el);
+    if (label) return cleanLabel(label);
     
-    const legendLabel = getLegendOrFieldsetLabel(el);
-    if (legendLabel) return legendLabel;
+    label = getLegendOrFieldsetLabel(el);
+    if (label) return cleanLabel(label);
     
-    const associatedLabel = getAssociatedLabelText(el);
-    if (associatedLabel) return associatedLabel;
+    label = getAssociatedLabelText(el);
+    if (label) return cleanLabel(label);
     
-    const ariaLabel = getAriaLabel(el);
-    if (ariaLabel) return ariaLabel;
+    label = getAriaLabel(el);
+    if (label) return cleanLabel(label);
     
-    const nearbyText = getNearbyHeadingOrText(el);
-    if (nearbyText) return nearbyText;
+    label = getNearbyHeadingOrText(el);
+    if (label) return cleanLabel(label);
     
-    const humanizedName = humanizeName(el.name || el.id);
-    if (humanizedName) return humanizedName;
+    label = humanizeName(el.name || el.id);
+    if (label) return cleanLabel(label);
     
     const placeholder = el.getAttribute('placeholder');
     if (placeholder && isValidLabelText(placeholder)) {
-      return `(placeholder) ${placeholder}`;
+      return `(placeholder) ${cleanLabel(placeholder)}`;
     }
     
     return 'Unlabeled field';

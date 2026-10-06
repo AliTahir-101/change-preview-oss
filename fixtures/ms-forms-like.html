@@ -278,15 +278,20 @@
   <div class="form-container">
     <div class="test-info">
       <strong>🧪 Microsoft Forms-like Test Fixture</strong>
-      This page mimics Microsoft Forms' DOM structure. The extension should show question titles like "What is your name?" as labels, NOT "Multi-line text" or option values like "Three by one".
+      This page mimics Microsoft Forms' DOM structure. The extension MUST strip type suffixes from labels.
       <br><br>
-      <strong>Expected labels:</strong>
+      <strong>✅ Label stripping test cases:</strong>
       <ul style="margin-top: 8px; padding-left: 20px;">
-        <li>"What is your name?" — not "Multi-line text"</li>
-        <li>"What is your favorite color?" — not "Choice"</li>
-        <li>"Which class are you in?" — not "Three by one" (an option)</li>
-        <li>"How would you rate this form?" — not "Rating"</li>
-        <li>"Select your interests" — not individual option names</li>
+        <li><code>"What is your name ?Multi Line Text."</code> → must show <strong>"What is your name ?"</strong> only</li>
+        <li><code>"What is your email address?Single Line Text"</code> → must show <strong>"What is your email address?"</strong> only</li>
+        <li><code>"Which class are you in?Choice"</code> → must show <strong>"Which class are you in?"</strong> only</li>
+        <li>Type text appears ONLY via info icon tooltip (ℹ️), never in field label</li>
+      </ul>
+      <br>
+      <strong>❌ Should NOT show:</strong>
+      <ul style="margin-top: 8px; padding-left: 20px;">
+        <li>"Multi Line Text", "Single Line Text", "Choice", "Text", "Rating", etc. in field column</li>
+        <li>Option values like "Three by one" as field name (belongs in Was/Now only)</li>
       </ul>
     </div>
     
@@ -313,16 +318,31 @@
         </div>
         
         <!-- Question 2: Textarea (multi-line) - Ali's first example -->
+        <!-- MS Forms often puts type in aria-label: "What is your name ?Multi Line Text." -->
         <div class="office-form-question" data-question-type="multiline">
           <div class="office-form-question-title">
-            <span class="question-title-box">What is your name?</span>
+            <span class="question-title-box">What is your name ?</span>
             <span class="required-indicator">*</span>
           </div>
-          <div class="question-type-indicator">Multi-line text</div>
+          <div class="question-type-indicator">Multi Line Text.</div>
           <textarea class="office-form-textfield" 
                     name="full_name" 
+                    aria-label="What is your name ?Multi Line Text."
                     placeholder="Enter your full name"
                     required>John Smith</textarea>
+        </div>
+        
+        <!-- Question 2b: Test with concatenated aria-label (no space before type) -->
+        <div class="office-form-question" data-question-type="text">
+          <div class="office-form-question-title">
+            <span class="question-title-box">Enter your student ID</span>
+          </div>
+          <div class="question-type-indicator">Text</div>
+          <input type="text" 
+                 class="office-form-textfield" 
+                 name="student_id"
+                 aria-label="Enter your student IDText"
+                 value="STU-12345">
         </div>
         
         <!-- Question 3: Radio choice - color -->
