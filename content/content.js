@@ -1106,6 +1106,65 @@
   }
   
   /**
+   * Apply changes while preserving the original baseline (Was values).
+   * 
+   * This is used after Reapply to keep the full detection list intact.
+   * For each change:
+   * 1. Set baseline[key] = was (original value before user edited)
+   * 2. Apply "now" value to the form field
+   * 
+   * This way getDirtyFields() will continue showing all restored changes,
+   * not just fields edited after Reapply.
+   */
+  function applyChangesWithBaseline(changes) {
+    const results = { applied: 0, failed: 0, total: changes.length, failures: [] };
+    
+    for (const change of changes) {
+      const el = findFieldForChange(change);
+      if (!el) {
+        results.failed++;
+        results.failures.push(change.label || change.key);
+        continue;
+      }
+      
+      if (shouldSkipField(el)) {
+        results.failed++;
+        results.failures.push(change.label || change.key);
+        continue;
+      }
+      
+      // Set baseline to the "was" value so this field stays in dirty list
+      const fieldKey = getFieldKey(el);
+      baseline.set(fieldKey, {
+        label: change.label,
+        type: change.type,
+        value: change.was,
+        element: el
+      });
+      
+      // Apply the "now" value to the form
+      try {
+        const success = setFieldValue(el, change.now, change.type);
+        if (success) {
+          results.applied++;
+        } else {
+          results.failed++;
+          results.failures.push(change.label || change.key);
+        }
+      } catch (err) {
+        console.error('Failed to apply change:', change.key, err);
+        results.failed++;
+        results.failures.push(change.label || change.key);
+      }
+    }
+    
+    // Update badge to reflect the restored dirty count
+    updateBadge();
+    
+    return results;
+  }
+  
+  /**
    * Applies one change. Uses prioritized field matching:
    * 1. Direct key match (name:*, id:*, path:*)
    * 2. Fallback to name attribute from stored key
@@ -1317,22 +1376,21 @@
         
       case 'APPLY_CHANGES':
         /**
-         * Apply stored values back to form fields.
-         * After applying, re-baseline so the applied values become the new baseline.
-         * This prevents the applied values from appearing as "dirty".
-         * Suppress notifications during apply to prevent the input/change events
-         * triggered by setFieldValue from causing phantom dirty rows.
+         * Apply stored "Now" values back to form fields, using "Was" as baseline.
+         * 
+         * CRITICAL: After Reapply, we must preserve the original baseline (Was values)
+         * so that getDirtyFields() continues to show all restored changes.
+         * 
+         * If we re-baseline to current (applied) values, then getDirtyFields() would
+         * return empty, and editing one field would collapse the list to just that field.
+         * 
+         * Instead: set baseline[key] = was for each applied change.
+         * This keeps the full detection list intact after Reapply.
+         * User edits update that field's "now" value while keeping other rows.
          */
         suppressFor(1000);
-        const results = applyChanges(message.changes || []);
-        
-        // Re-baseline after apply so applied values are the new baseline
-        // Future edits will be compared against this post-apply state
-        setTimeout(() => {
-          snapshotBaseline(true);
-        }, 100);
-        
-        sendResponse(results);
+        const applyResults = applyChangesWithBaseline(message.changes || []);
+        sendResponse(applyResults);
         break;
         
       default:

@@ -698,22 +698,18 @@ async function reapplyChanges() {
       }
       
       // After Reapply:
-      // - Content script will re-baseline (applied values become new baseline)
+      // - Content script set baseline[key] = was for each change
+      // - Form now has "now" values
+      // - getDirtyFields() will return all restored changes (now vs was baseline)
       // - Hide Reapply button since values are now applied
-      // - DO NOT call refreshData() immediately - let content script settle
-      // - Storage still has the snapshot in case user needs to reapply again
+      // - KEEP the detection list visible - do NOT clear to 0
       isShowingRestoredData = false;
       formLooksReset = false;
       updateReapplyVisibility();
       
-      // Update UI to show 0 changes since baseline now equals current values
-      // (Content script is re-baselining in the background)
-      if (currentData) {
-        updateUI({
-          ...currentData,
-          dirty: []
-        });
-      }
+      // Keep showing the restored changes - they're still "dirty" vs original baseline
+      // The content script has set baseline = was values, so getDirtyFields() will
+      // return the same list. Future user edits will merge into this list.
     }
   } catch (err) {
     console.error('Failed to reapply changes:', err);
