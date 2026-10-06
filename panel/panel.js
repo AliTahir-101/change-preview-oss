@@ -19,34 +19,103 @@ const elements = {
 
 let currentData = null;
 
-const TYPE_INFO = {
-  'text': { icon: 'T', label: 'Text' },
-  'email': { icon: '@', label: 'Email' },
-  'number': { icon: '#', label: 'Number' },
-  'tel': { icon: '☎', label: 'Phone' },
-  'url': { icon: '🔗', label: 'URL' },
-  'date': { icon: '📅', label: 'Date' },
-  'time': { icon: '🕐', label: 'Time' },
-  'datetime-local': { icon: '📅', label: 'Date & Time' },
-  'month': { icon: '📅', label: 'Month' },
-  'week': { icon: '📅', label: 'Week' },
-  'color': { icon: '🎨', label: 'Color' },
-  'range': { icon: '⇔', label: 'Range' },
-  'search': { icon: '🔍', label: 'Search' },
-  'textarea': { icon: '¶', label: 'Multi-line text' },
-  'select': { icon: '▼', label: 'Dropdown' },
-  'select-one': { icon: '▼', label: 'Dropdown' },
-  'select-multiple': { icon: '☰', label: 'Multi-select' },
-  'radio': { icon: '◉', label: 'Choice' },
-  'checkbox': { icon: '☑', label: 'Checkbox' },
-  'checkbox-group': { icon: '☑', label: 'Checkboxes' },
-  'contenteditable': { icon: '✎', label: 'Rich text' }
+const TYPE_ICONS = {
+  'text': {
+    svg: '<path d="M4 5h12M4 12h12M4 19h8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
+    label: 'Text'
+  },
+  'email': {
+    svg: '<rect x="2" y="4" width="20" height="16" rx="2" stroke="currentColor" stroke-width="2" fill="none"/><path d="M2 7l10 7 10-7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>',
+    label: 'Email'
+  },
+  'number': {
+    svg: '<path d="M7 20l4-16M13 20l4-16M3 8h18M3 16h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
+    label: 'Number'
+  },
+  'tel': {
+    svg: '<path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6 19.79 19.79 0 01-3.07-8.67A2 2 0 014.11 2h3a2 2 0 012 1.72c.127.96.361 1.903.7 2.81a2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0122 16.92z" stroke="currentColor" stroke-width="2" fill="none"/>',
+    label: 'Phone'
+  },
+  'url': {
+    svg: '<path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/>',
+    label: 'URL'
+  },
+  'date': {
+    svg: '<rect x="3" y="4" width="18" height="18" rx="2" stroke="currentColor" stroke-width="2" fill="none"/><path d="M16 2v4M8 2v4M3 10h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
+    label: 'Date'
+  },
+  'time': {
+    svg: '<circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" fill="none"/><path d="M12 6v6l4 2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
+    label: 'Time'
+  },
+  'datetime-local': {
+    svg: '<rect x="3" y="4" width="18" height="18" rx="2" stroke="currentColor" stroke-width="2" fill="none"/><path d="M16 2v4M8 2v4M3 10h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="15" r="2" stroke="currentColor" stroke-width="1.5" fill="none"/>',
+    label: 'Date & Time'
+  },
+  'textarea': {
+    svg: '<rect x="3" y="3" width="18" height="18" rx="2" stroke="currentColor" stroke-width="2" fill="none"/><path d="M7 7h10M7 12h10M7 17h6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
+    label: 'Multi-line text'
+  },
+  'select': {
+    svg: '<path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>',
+    label: 'Dropdown'
+  },
+  'select-one': {
+    svg: '<path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>',
+    label: 'Dropdown'
+  },
+  'select-multiple': {
+    svg: '<path d="M4 6h16M4 12h16M4 18h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="8" cy="6" r="1" fill="currentColor"/><circle cx="8" cy="12" r="1" fill="currentColor"/><circle cx="8" cy="18" r="1" fill="currentColor"/>',
+    label: 'Multi-select'
+  },
+  'radio': {
+    svg: '<circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2" fill="none"/><circle cx="12" cy="12" r="4" fill="currentColor"/>',
+    label: 'Choice'
+  },
+  'checkbox': {
+    svg: '<rect x="3" y="3" width="18" height="18" rx="2" stroke="currentColor" stroke-width="2" fill="none"/><path d="M9 12l2 2 4-4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>',
+    label: 'Checkbox'
+  },
+  'checkbox-group': {
+    svg: '<rect x="3" y="3" width="18" height="18" rx="2" stroke="currentColor" stroke-width="2" fill="none"/><path d="M9 12l2 2 4-4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>',
+    label: 'Checkboxes'
+  },
+  'contenteditable': {
+    svg: '<path d="M12 20h9M16.5 3.5a2.121 2.121 0 113 3L7 19l-4 1 1-4L16.5 3.5z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>',
+    label: 'Rich text'
+  },
+  'color': {
+    svg: '<circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2" fill="none"/><circle cx="12" cy="8" r="2" fill="currentColor"/><circle cx="8" cy="14" r="2" fill="currentColor"/><circle cx="16" cy="14" r="2" fill="currentColor"/>',
+    label: 'Color'
+  },
+  'range': {
+    svg: '<path d="M4 12h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2" fill="none"/>',
+    label: 'Range'
+  },
+  'search': {
+    svg: '<circle cx="11" cy="11" r="8" stroke="currentColor" stroke-width="2" fill="none"/><path d="M21 21l-4.35-4.35" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
+    label: 'Search'
+  },
+  'default': {
+    svg: '<rect x="3" y="3" width="18" height="18" rx="2" stroke="currentColor" stroke-width="2" fill="none"/><path d="M12 8v8M8 12h8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
+    label: 'Field'
+  }
 };
 
-function getTypeInfo(type) {
-  if (!type) return { icon: '?', label: 'Field' };
-  const normalized = type.toLowerCase();
-  return TYPE_INFO[normalized] || { icon: 'T', label: type.charAt(0).toUpperCase() + type.slice(1) };
+function createTypeIcon(type) {
+  const typeKey = (type || '').toLowerCase();
+  const info = TYPE_ICONS[typeKey] || TYPE_ICONS['default'];
+  
+  const wrapper = document.createElement('span');
+  wrapper.className = 'field-type-icon';
+  wrapper.setAttribute('title', info.label);
+  wrapper.setAttribute('aria-label', `Field type: ${info.label}`);
+  wrapper.setAttribute('role', 'img');
+  wrapper.setAttribute('tabindex', '0');
+  
+  wrapper.innerHTML = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none">${info.svg}</svg>`;
+  
+  return { element: wrapper, label: info.label };
 }
 
 function escapeHtml(str) {
@@ -125,34 +194,27 @@ function updateUI(data) {
       labelSpan.textContent = field.label;
       labelWrapper.appendChild(labelSpan);
       
-      const typeInfo = getTypeInfo(field.type);
-      const typeIcon = document.createElement('span');
-      typeIcon.className = 'field-type-icon';
-      typeIcon.textContent = typeInfo.icon;
-      typeIcon.setAttribute('title', typeInfo.label);
-      typeIcon.setAttribute('aria-label', `Field type: ${typeInfo.label}`);
-      typeIcon.setAttribute('role', 'img');
-      typeIcon.setAttribute('tabindex', '0');
+      const { element: typeIcon } = createTypeIcon(field.type);
       labelWrapper.appendChild(typeIcon);
       
       labelCell.appendChild(labelWrapper);
       
       const wasCell = document.createElement('td');
       const wasSpan = document.createElement('span');
-      wasSpan.className = 'field-was value-expandable';
+      wasSpan.className = 'field-was value-copyable';
       wasSpan.textContent = truncate(field.was);
-      wasSpan.title = field.was || '(empty)';
-      wasSpan.dataset.full = field.was || '(empty)';
-      wasSpan.addEventListener('click', toggleExpand);
+      wasSpan.title = 'Click to copy previous value';
+      wasSpan.dataset.value = field.was || '';
+      wasSpan.addEventListener('click', () => copyValue(field.was, 'Previous value'));
       wasCell.appendChild(wasSpan);
       
       const nowCell = document.createElement('td');
       const nowSpan = document.createElement('span');
-      nowSpan.className = 'field-now value-expandable';
+      nowSpan.className = 'field-now value-copyable';
       nowSpan.textContent = truncate(field.now);
-      nowSpan.title = field.now || '(empty)';
-      nowSpan.dataset.full = field.now || '(empty)';
-      nowSpan.addEventListener('click', toggleExpand);
+      nowSpan.title = 'Click to copy current value';
+      nowSpan.dataset.value = field.now || '';
+      nowSpan.addEventListener('click', () => copyValue(field.now, 'Current value'));
       nowCell.appendChild(nowSpan);
       
       row.appendChild(labelCell);
@@ -163,13 +225,14 @@ function updateUI(data) {
   }
 }
 
-function toggleExpand(e) {
-  const span = e.target;
-  const isExpanded = span.classList.toggle('expanded');
-  if (isExpanded) {
-    span.textContent = span.dataset.full;
-  } else {
-    span.textContent = truncate(span.dataset.full);
+async function copyValue(value, label) {
+  const text = value || '(empty)';
+  try {
+    await navigator.clipboard.writeText(text);
+    showToast(`${label} copied`);
+  } catch (err) {
+    console.error('Copy failed:', err);
+    showToast('Copy failed');
   }
 }
 

@@ -218,9 +218,8 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 18px;
-  height: 18px;
-  font-size: 11px;
+  width: 20px;
+  height: 20px;
   color: var(--text-muted);
   background: var(--bg-secondary);
   border: 1px solid var(--border);
@@ -228,6 +227,11 @@ body {
   flex-shrink: 0;
   cursor: help;
   transition: all 0.15s ease;
+}
+
+.field-type-icon svg {
+  width: 12px;
+  height: 12px;
 }
 
 .field-type-icon:hover {
@@ -267,17 +271,19 @@ body {
   text-overflow: ellipsis;
 }
 
-.value-expandable {
+.value-copyable {
   cursor: pointer;
+  transition: all 0.15s ease;
+  position: relative;
 }
 
-.value-expandable:hover {
-  opacity: 0.8;
+.value-copyable:hover {
+  opacity: 0.85;
+  transform: scale(1.02);
 }
 
-.value-expandable.expanded {
-  white-space: normal;
-  overflow: visible;
+.value-copyable:active {
+  transform: scale(0.98);
 }
 
 .footer {
