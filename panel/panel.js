@@ -66,6 +66,29 @@ let panelClearedSession = false;
 let clearedPageKey = null;
 
 /**
+ * Detect the benign "no content script on this tab yet" error.
+ *
+ * chrome.tabs.sendMessage rejects with "Could not establish connection.
+ * Receiving end does not exist." whenever the active tab has no content script
+ * listening — e.g. chrome:// pages, the new tab page, restricted URLs, or an
+ * ordinary page before injection has finished. This is expected while polling
+ * and should NOT be surfaced as a console.error (Chrome shows those on
+ * chrome://extensions). Real, unexpected failures are still logged.
+ */
+function isBenignConnectionError(err) {
+  const message =
+    (err && err.message) ||
+    (chrome.runtime.lastError && chrome.runtime.lastError.message) ||
+    (typeof err === 'string' ? err : '') ||
+    '';
+  return (
+    message.includes('Could not establish connection') ||
+    message.includes('Receiving end does not exist') ||
+    message.includes('The message port closed before a response was received')
+  );
+}
+
+/**
  * Check if we're in the short-term cleared window (5 seconds after Clear).
  * This blocks stale updates from Reapply, but does NOT block real new edits.
  * panelClearedSession is checked separately to control storage saves.
@@ -538,7 +561,14 @@ async function refreshData() {
       updateReapplyVisibility();
     }
   } catch (err) {
-    console.error('Failed to get fields:', err);
+    // Benign: the active tab has no content script yet (chrome:// pages, new
+    // tab, restricted URLs, or before injection). Expected while polling, so
+    // stay quiet instead of spamming chrome://extensions with console.error.
+    if (isBenignConnectionError(err)) {
+      console.debug('ChangePreview: no content script on active tab (expected).');
+    } else {
+      console.error('Failed to get fields:', err);
+    }
     
     // Don't restore from storage if cleared or not just reloaded
     if (isCleared() || panelClearedSession || !justReloaded) return;
@@ -872,8 +902,12 @@ async function clearDetections() {
     
     showToast('Detections cleared');
   } catch (err) {
-    console.error('Failed to clear detections:', err);
-    showToast('Failed to clear');
+    if (isBenignConnectionError(err)) {
+      console.debug('ChangePreview: clear skipped, no content script on active tab (expected).');
+    } else {
+      console.error('Failed to clear detections:', err);
+      showToast('Failed to clear');
+    }
   }
 }
 
@@ -916,7 +950,15 @@ async function reapplyChanges() {
       // Without this, the table shows OLD persisted `now` values instead of live DOM values.
       // Wait briefly for content script's suppress window to clear, then get fresh data.
       setTimeout(async () => {
-        const freshResponse = await chrome.tabs.sendMessage(tab.id, { type: 'GET_FIELDS' });
+        let freshResponse;
+        try {
+          freshResponse = await chrome.tabs.sendMessage(tab.id, { type: 'GET_FIELDS' });
+        } catch (err) {
+          if (!isBenignConnectionError(err)) {
+            console.error('Failed to refresh after reapply:', err);
+          }
+          return;
+        }
         if (freshResponse?.dirty?.length > 0) {
           const fieldKeys = (freshResponse.dirty || []).map(f => f.key);
           const allFieldKeys = freshResponse.allFieldKeys || fieldKeys;
@@ -934,8 +976,12 @@ async function reapplyChanges() {
       }, 1200);
     }
   } catch (err) {
-    console.error('Failed to reapply changes:', err);
-    showToast('Failed to reapply');
+    if (isBenignConnectionError(err)) {
+      console.debug('ChangePreview: reapply skipped, no content script on active tab (expected).');
+    } else {
+      console.error('Failed to reapply changes:', err);
+      showToast('Failed to reapply');
+    }
   }
 }
 
