@@ -405,6 +405,12 @@ function updateUI(data) {
     for (const field of data.dirty) {
       rowNum++;
       const row = document.createElement('tr');
+      // Whole-row click locates (scrolls to + highlights) the field on the page.
+      // Copyable spans/buttons stopPropagation so copying never also triggers it.
+      row.className = 'change-row';
+      row.dataset.key = field.key;
+      row.title = 'Click to find this field on the page';
+      row.addEventListener('click', () => locateField(field.key, row));
       
       const numCell = document.createElement('td');
       numCell.className = 'row-number-cell';
@@ -421,7 +427,7 @@ function updateUI(data) {
       labelSpan.className = 'field-label field-label-copyable';
       labelSpan.textContent = field.label;
       labelSpan.title = 'Click to copy field name';
-      labelSpan.addEventListener('click', () => copyValue(field.label, 'Field name'));
+      labelSpan.addEventListener('click', (e) => { e.stopPropagation(); copyValue(field.label, 'Field name'); });
       labelWrapper.appendChild(labelSpan);
       
       const typeIcon = createTypeInfoIcon(field.type);
@@ -491,7 +497,7 @@ function createValueCell(value, className, copyLabel) {
   wrapper.appendChild(actionsWrapper);
   cell.appendChild(wrapper);
   
-  valueSpan.addEventListener('click', () => copyValue(value, copyLabel));
+  valueSpan.addEventListener('click', (e) => { e.stopPropagation(); copyValue(value, copyLabel); });
   
   return cell;
 }
@@ -522,6 +528,39 @@ async function copyValue(value, label) {
   } catch (err) {
     console.error('Copy failed:', err);
     showToast('Copy failed');
+  }
+}
+
+/**
+ * Locate a detected field on the page: ask the active tab's content script to
+ * scroll to and highlight the control for this row's key. Fields inside tracked
+ * same-origin frames are forwarded there by the content script; cross-origin
+ * frames fail soft (no highlight, no crash).
+ */
+async function locateField(key, rowEl) {
+  // Brief in-panel flash so the click feels responsive even before the page scrolls.
+  if (rowEl) {
+    rowEl.classList.remove('row-locating');
+    // reflow so the animation restarts on rapid repeated clicks
+    void rowEl.offsetWidth;
+    rowEl.classList.add('row-locating');
+    setTimeout(() => rowEl.classList.remove('row-locating'), 900);
+  }
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.id) return;
+    const resp = await chrome.tabs.sendMessage(tab.id, { type: 'REVEAL_FIELD', key });
+    // Only toast a definitive miss for a top-document field. Frame-forwarded
+    // reveals resolve asynchronously in the child frame, so we can't confirm them.
+    if (resp && resp.found === false && !resp.forwarded) {
+      showToast('Could not find this field on the page');
+    }
+  } catch (err) {
+    if (isBenignConnectionError(err)) {
+      showToast('Open the form page to locate fields');
+    } else {
+      console.error('Locate failed:', err);
+    }
   }
 }
 

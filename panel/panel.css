@@ -286,6 +286,25 @@ body {
   background: var(--bg-secondary);
 }
 
+/* Whole-row click locates the field on the page. */
+.change-row {
+  cursor: pointer;
+}
+
+.change-row:hover .row-number {
+  color: var(--accent);
+}
+
+/* Brief flash when a row is clicked to locate its field. */
+@keyframes cp-row-locate-flash {
+  0% { background: rgba(230, 126, 34, 0.35); }
+  100% { background: transparent; }
+}
+
+.change-row.row-locating td {
+  animation: cp-row-locate-flash 0.9s ease-out;
+}
+
 .field-label-wrapper {
   display: flex;
   align-items: flex-start;
