@@ -1638,6 +1638,52 @@
     return null;
   }
 
+  /**
+   * Pick the element to HIGHLIGHT for a detection row.
+   *
+   * For choice groups the baseline stores the FIRST option as the group's
+   * `element`, which is usually not the option the row describes — so a naive
+   * reveal highlights the wrong option (e.g. MS Forms: B selected, A highlighted).
+   * Target the SELECTED option instead, generically across radios, checkbox
+   * groups and card-style choice UIs (via the existing group/wrapper helpers):
+   *   - radio group → the checked radio's clickable wrapper (else the question
+   *     root if nothing is checked);
+   *   - checkbox group → the single checked option's wrapper, or the group root
+   *     when several/none are checked (frame the whole question, never a sibling);
+   *   - everything else (text, textarea, select, lone checkbox) → the control.
+   */
+  function resolveRevealTarget(key) {
+    const entry = baseline.get(key);
+    const base = resolveElementForKey(key);
+    if (!base) return null;
+    const type = entry && entry.type;
+
+    if (base.type === 'radio' || type === 'radio') {
+      try {
+        const inputs = getRadioGroupInputs(base);
+        const checked = inputs.find((r) => r.checked);
+        if (checked) return getOptionWrapper(checked) || checked;
+        const root = getRadioRoot(base);
+        if (root) return root;
+      } catch {}
+      return getOptionWrapper(base) || base;
+    }
+
+    if (type === 'checkbox-group') {
+      try {
+        const group = getCheckboxGroupInputs(base);
+        if (group && Array.isArray(group.checkboxes)) {
+          const checked = group.checkboxes.filter((cb) => cb.checked);
+          if (checked.length === 1) return getOptionWrapper(checked[0]) || checked[0];
+          if (group.root) return group.root;
+        }
+      } catch {}
+      return base;
+    }
+
+    return base;
+  }
+
   function maybeFocusField(el) {
     // Focus only simple text-like controls, and never scroll via focus (we scroll
     // ourselves). Avoid focusing checkbox/radio/select/file/date which can trigger
@@ -1656,7 +1702,7 @@
    * Returns true if a live element was found and highlighted.
    */
   function revealFieldLocal(key) {
-    const el = resolveElementForKey(key);
+    const el = resolveRevealTarget(key);
     if (!el) return false;
 
     try {
@@ -3035,6 +3081,7 @@
       handleFrameMessage,
       clearBaselineLocal,
       revealFieldLocal,
+      resolveRevealTarget,
       getSubFrameReports: () => subFrameReports
     };
   }
