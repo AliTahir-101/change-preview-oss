@@ -32,13 +32,15 @@ ChangePreview is **free**. Every feature works with no license key, Buy button, 
 ## Usage
 
 1. Navigate to any form-based page (or open `fixtures/plain-admin.html` for testing)
-2. The extension automatically snapshots all visible form fields
-3. Make changes to the form
-4. The badge shows the number of changed fields
-5. Click the extension icon (or press `Alt+Shift+C`) to open the side panel
+2. Click the extension icon (or press `Alt+Shift+C`) to open the side panel — this injects tracking on the **current** page only
+3. The extension snapshots visible form fields on that page
+4. Make changes to the form
+5. The badge shows the number of changed fields
 6. Review changes in the "Field | Was | Now" table
 7. Click **Copy Markdown** or **Copy CSV** to export
 8. When you click Save/Submit, a confirmation modal shows what's about to change
+
+Until you open ChangePreview on a page, no content script runs. After you navigate to a different page (or reload), open the extension again to start tracking there. Restricted pages (`chrome://`, the Chrome Web Store, etc.) cannot be injected and fail softly.
 
 ## Test Fixtures
 
@@ -153,21 +155,23 @@ The extension uses fail-soft behavior: when it can't track everything, it tells 
 
 ## Permissions
 
-- `activeTab` — Access the current tab to read form fields
+- `activeTab` — Access the current tab after you click the icon / shortcut
+- `scripting` — Inject `content/content.js` into that tab (all frames) on demand
 - `storage` — Store settings locally
 - `sidePanel` — Display the side panel UI
 
-No network permissions required.
+No `host_permissions`, no `<all_urls>` content scripts, and no network permissions. The content script is not always-on; it is injected only when you open ChangePreview on a page.
 
 ## Development
 
 This is a Manifest V3 Chrome extension. The structure is:
 
 ```
-├── manifest.json       # Extension manifest
-├── background.js       # Service worker
+├── manifest.json              # Extension manifest (no host_permissions / content_scripts)
+├── background.js              # Service worker (injects on action click)
+├── ensure-content-script.js   # Ping-or-inject helper (activeTab + scripting)
 ├── content/
-│   └── content.js      # Content script (field detection, save intercept)
+│   └── content.js             # Content script (injected on demand, all frames)
 ├── panel/
 │   ├── panel.html      # Side panel markup
 │   ├── panel.css       # Side panel styles

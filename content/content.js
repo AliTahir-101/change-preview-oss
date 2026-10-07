@@ -7,12 +7,19 @@
 (function() {
   'use strict';
 
+  // Programmatic inject (activeTab + scripting, allFrames) can run this file
+  // more than once if two ensure() calls race. Skip a second init so we don't
+  // double-register listeners / baselines. Tests eval once per jsdom window.
+  if (globalThis.__CHANGEPREVIEW_LOADED__) return;
+  globalThis.__CHANGEPREVIEW_LOADED__ = true;
+
   /**
    * Is this content script running in the TOP-LEVEL browsing context (the tab's
    * real page) rather than a sub-frame / iframe?
    *
-   * The extension injects into all frames (`all_frames: true`) so it can reach
-   * forms rendered inside iframes (SPA dashboards, portals, embedded widgets).
+   * The extension injects into all frames (`allFrames: true` on executeScript)
+   * when the user opens ChangePreview, so it can reach forms rendered inside
+   * iframes (SPA dashboards, portals, embedded widgets).
    * We separate two concerns that an earlier version wrongly collapsed into one:
    *
    *   - WHERE WE COLLECT FIELDS: every frame collects its own fields, so forms
@@ -2952,6 +2959,10 @@
     if (!IS_TOP_FRAME) return false;
 
     switch (message.type) {
+      case 'PING':
+        sendResponse({ ok: true });
+        break;
+
       case 'GET_FIELDS': {
         const agg = getAggregatedReport();
         sendResponse({

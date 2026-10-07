@@ -69,6 +69,8 @@ let onActivatedListener = null;
 let onUpdatedListener = null;
 let onFocusChangedListener = null;
 
+const sentMessages = [];
+
 const chromeStub = {
   runtime: {
     lastError: null,
@@ -79,6 +81,8 @@ const chromeStub = {
     query() { queryCount++; return Promise.resolve([activeTabForQuery]); },
     get(tabId) { return Promise.resolve(TABS[tabId] || null); },
     sendMessage(tabId, msg) {
+      sentMessages.push({ tabId, type: msg && msg.type });
+      if (msg && msg.type === 'PING') return Promise.resolve({ ok: true });
       if (msg && msg.type === 'GET_FIELDS') return Promise.resolve(fieldResponses[tabId] || null);
       return Promise.resolve({ success: true });
     },
@@ -122,6 +126,11 @@ check('panel registered an onUpdated listener', typeof onUpdatedListener === 'fu
 // Bind the panel to the Forms tab (as if the user activated it).
 await onActivatedListener({ tabId: FORMS_TAB });
 await tick();
+const firstPing = sentMessages.findIndex((m) => m.type === 'PING' && m.tabId === FORMS_TAB);
+const firstGet = sentMessages.findIndex((m) => m.type === 'GET_FIELDS' && m.tabId === FORMS_TAB);
+check('refresh pings the content script before GET_FIELDS (inject-then-message)',
+  firstPing !== -1 && firstGet !== -1 && firstPing < firstGet,
+  `order=${JSON.stringify(sentMessages)}`);
 check('panel bound to the active (Forms) tab', hostInfo.textContent === 'forms.cloud.microsoft',
   `host=${hostInfo.textContent}`);
 check('active tab starts with no changes', /0 changes/.test(changeCount.textContent),

@@ -3,6 +3,8 @@
  * Displays dirty fields, copy Markdown/CSV, re-snapshot.
  */
 
+import { ensureContentScript } from '../ensure-content-script.js';
+
 const elements = {
   // Main panel elements
   mainPanel: document.getElementById('mainPanel'),
@@ -278,8 +280,21 @@ function isBenignConnectionError(err) {
   return (
     message.includes('Could not establish connection') ||
     message.includes('Receiving end does not exist') ||
-    message.includes('The message port closed before a response was received')
+    message.includes('The message port closed before a response was received') ||
+    message.includes('Cannot access') ||
+    message.includes('The extensions gallery cannot be scripted') ||
+    message.includes('Must request permission')
   );
+}
+
+/**
+ * Inject the content script if needed, then message that tab.
+ * Until the user opens ChangePreview on the page, there is no content script;
+ * ensure() fails soft on restricted URLs and missing activeTab.
+ */
+async function sendToTab(tabId, message, tabUrl) {
+  await ensureContentScript(tabId, tabUrl);
+  return chrome.tabs.sendMessage(tabId, message);
 }
 
 /**
@@ -672,7 +687,7 @@ async function locateField(key, rowEl) {
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab?.id) return;
-    const resp = await chrome.tabs.sendMessage(tab.id, { type: 'REVEAL_FIELD', key });
+    const resp = await sendToTab(tab.id, { type: 'REVEAL_FIELD', key }, tab.url);
     // Only toast a definitive miss for a top-document field. Frame-forwarded
     // reveals resolve asynchronously in the child frame, so we can't confirm them.
     if (resp && resp.found === false && !resp.forwarded) {
@@ -765,7 +780,7 @@ async function refreshData(explicitTabId) {
   activeTabId = tabId;
   
   try {
-    const response = await chrome.tabs.sendMessage(tabId, { type: 'GET_FIELDS' });
+    const response = await sendToTab(tabId, { type: 'GET_FIELDS' }, tab.url);
     if (response) {
       const fieldKeys = (response.dirty || []).map(f => f.key);
       const allFieldKeys = response.allFieldKeys || fieldKeys;
@@ -1099,7 +1114,7 @@ async function savePersistSetting(enabled) {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
       if (tab?.id) {
         try {
-          const response = await chrome.tabs.sendMessage(tab.id, { type: 'GET_FIELDS' });
+          const response = await sendToTab(tab.id, { type: 'GET_FIELDS' }, tab.url);
           if (response?.dirty?.length > 0) {
             const fieldKeys = (response.dirty || []).map(f => f.key);
             const allFieldKeys = response.allFieldKeys || fieldKeys;
@@ -1174,7 +1189,7 @@ async function clearDetections() {
     await clearPersistedDetections(pageKey);
     
     // Tell content script to re-baseline from current live values
-    const response = await chrome.tabs.sendMessage(tab.id, { type: 'CLEAR_BASELINE' });
+    const response = await sendToTab(tab.id, { type: 'CLEAR_BASELINE' }, tab.url);
     
     // Reset all panel state
     endKeepRestore();
@@ -1220,10 +1235,10 @@ async function reapplyChanges() {
       return;
     }
     
-    const response = await chrome.tabs.sendMessage(tab.id, {
+    const response = await sendToTab(tab.id, {
       type: 'APPLY_CHANGES',
       changes: persisted.dirty
-    });
+    }, tab.url);
     
     if (response) {
       const { applied, failed, total } = response;
@@ -1249,7 +1264,7 @@ async function reapplyChanges() {
       setTimeout(async () => {
         let freshResponse;
         try {
-          freshResponse = await chrome.tabs.sendMessage(tab.id, { type: 'GET_FIELDS' });
+          freshResponse = await sendToTab(tab.id, { type: 'GET_FIELDS' }, tab.url);
         } catch (err) {
           if (!isBenignConnectionError(err)) {
             console.error('Failed to refresh after reapply:', err);

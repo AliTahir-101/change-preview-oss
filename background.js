@@ -1,7 +1,9 @@
 /**
  * ChangePreview Background Service Worker
- * Coordinates messaging, badge updates, and panel opening.
+ * Coordinates messaging, badge updates, on-demand content injection, and panel opening.
  */
+
+import { ensureContentScript } from './ensure-content-script.js';
 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.storage.session.set({ interceptEnabled: true });
@@ -40,7 +42,15 @@ function updateBadge(tabId, count) {
 }
 
 chrome.action.onClicked.addListener(async (tab) => {
-  await chrome.sidePanel.open({ windowId: tab.windowId });
+  // User gesture: activeTab is granted for this page. Inject before / as the
+  // panel opens so the first GET_FIELDS has a receiving end. With
+  // openPanelOnActionClick this listener may not fire; the panel also ensures.
+  if (tab?.id != null) {
+    await ensureContentScript(tab.id, tab.url);
+  }
+  if (tab?.windowId != null) {
+    await chrome.sidePanel.open({ windowId: tab.windowId }).catch(() => {});
+  }
 });
 
 chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});

@@ -130,10 +130,34 @@ Use these bullets when completing the dashboard's privacy / data-use disclosures
 - No analytics or tracking, and no user accounts.
 - Sensitive data minimization: password and other sensitive fields are skipped and not
   recorded.
-- Permissions are limited to what's needed to read the current form and show the panel
-  (activeTab, storage, sidePanel). No host permissions.
+- Permissions are limited to what's needed to read the current form (after the user
+  opens the extension on that tab) and show the panel: activeTab, scripting, storage,
+  sidePanel. There are **no host_permissions** and no static content_scripts (so no
+  `<all_urls>` match pattern). The content script is injected only on user gesture
+  via activeTab + chrome.scripting.executeScript.
 
 Single purpose (dashboard): see the Single-purpose statement above.
+
+---
+
+## Host permission justification (CWS dashboard)
+
+**Leave this field blank / skip it.** This package does not declare `host_permissions`
+and does not use a content-script `matches` pattern, so Chrome should not treat the
+item as requesting broad host access.
+
+If the dashboard still shows a Host permission justification box from an older zip:
+
+- Do not justify `<all_urls>` — that pattern is gone.
+- The only page access is **activeTab**: when the user clicks the ChangePreview icon
+  (or uses Alt+Shift+C), the extension may inject `content/content.js` into that tab
+  (including same-origin iframes when activeTab allows it) so the side panel can
+  show Was/Now, Keep/Reapply, Clear, click-to-locate, Confirm on save, and export.
+- Until the user opens ChangePreview on a page, no content script runs.
+- Restricted URLs (chrome://, the Chrome Web Store, etc.) are not injected.
+
+Do not add optional host permissions or a static `<all_urls>` content_scripts block
+to “make the field go away” — that is what triggered in-depth review.
 
 Support / feedback contact: info@nextgenfolks.com
 
