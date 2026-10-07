@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ChangePreview",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "See form changes before you save: compare Was vs Now, export to Markdown or CSV, keep edits locally. Private, nothing uploaded.",
   "permissions": [
     "activeTab",
@@ -22,8 +22,7 @@
     "default_path": "panel/panel.html"
   },
   "background": {
-    "service_worker": "background.js",
-    "type": "module"
+    "service_worker": "background.js"
   },
   "icons": {
     "16": "icons/icon16.png",

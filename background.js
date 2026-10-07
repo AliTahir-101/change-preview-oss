@@ -1,9 +1,68 @@
 /**
- * ChangePreview Background Service Worker
+ * ChangePreview Background Service Worker (classic script, not an ES module).
  * Coordinates messaging, badge updates, on-demand content injection, and panel opening.
+ *
+ * Do not add `import` / `export` here and do not set manifest background.type
+ * to "module". Chrome then tries to fetch imported files as SW modules and
+ * reports "An unknown error occurred when fetching the script".
+ *
+ * Keep the ensure* helpers below in sync with ensure-content-script.js (the
+ * panel still imports that file as an ES module).
  */
 
-import { ensureContentScript } from './ensure-content-script.js';
+const CONTENT_SCRIPT_FILE = 'content/content.js';
+const inFlight = new Map();
+const RESTRICTED_SCHEME =
+  /^(chrome|chrome-extension|chrome-search|chrome-untrusted|edge|about|devtools|view-source|data|javascript):/i;
+const WEBSTORE_HOST =
+  /^(https:\/\/)?(chromewebstore\.google\.com|chrome\.google\.com\/webstore|microsoftedge\.microsoft\.com\/addons)/i;
+
+function isRestrictedTabUrl(url) {
+  if (!url || typeof url !== 'string') return false;
+  return RESTRICTED_SCHEME.test(url) || WEBSTORE_HOST.test(url);
+}
+
+async function pingContentScript(tabId) {
+  try {
+    await chrome.tabs.sendMessage(tabId, { type: 'PING' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function injectContentScript(tabId) {
+  if (!chrome.scripting?.executeScript) return false;
+  await chrome.scripting.executeScript({
+    target: { tabId: tabId, allFrames: true },
+    files: [CONTENT_SCRIPT_FILE],
+    injectImmediately: true
+  });
+  return true;
+}
+
+async function ensureContentScript(tabId, tabUrl) {
+  if (tabId == null || tabId < 0) return false;
+  if (isRestrictedTabUrl(tabUrl)) return false;
+
+  const existing = inFlight.get(tabId);
+  if (existing) return existing;
+
+  const job = (async () => {
+    try {
+      if (await pingContentScript(tabId)) return true;
+      await injectContentScript(tabId);
+      return await pingContentScript(tabId);
+    } catch {
+      return false;
+    } finally {
+      inFlight.delete(tabId);
+    }
+  })();
+
+  inFlight.set(tabId, job);
+  return job;
+}
 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.storage.session.set({ interceptEnabled: true });

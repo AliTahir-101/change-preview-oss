@@ -159,6 +159,33 @@ If the dashboard still shows a Host permission justification box from an older z
 Do not add optional host permissions or a static `<all_urls>` content_scripts block
 to “make the field go away” — that is what triggered in-depth review.
 
+---
+
+## Packaging the CWS zip / unpacked stage folder
+
+**Pitfall (0.4.1):** a copy of only `manifest.json`, `background.js`, `content/`,
+`panel/`, and `icons/` omits `ensure-content-script.js`. `panel/panel.js` imports
+that root ES module. Include it in every zip / unpacked stage folder.
+
+**Service worker (0.4.2):** `background.js` is a **classic** script. Do not set
+`background.type` to `"module"` and do not `import` from the worker. A module
+worker that cannot fetch a static import shows “An unknown error occurred when
+fetching the script”. MV3 still requires `background.js` — do not remove it.
+
+Ship every file listed in `scripts/extension-files.mjs` (`SHIP_ROOT_FILES` +
+`SHIP_DIRS`). From this repo:
+
+```
+npm run stage
+```
+
+That copies the complete package to `dist/extension` (ready to zip or to point
+Load unpacked at). Confirm `ensure-content-script.js` sits next to `background.js`
+in the staged tree before zipping.
+
+Do not include `tests/`, `fixtures/`, `worker/`, `node_modules/`, or docs in the
+store zip.
+
 Support / feedback contact: info@nextgenfolks.com
 
 ---

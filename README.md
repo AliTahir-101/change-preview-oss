@@ -29,6 +29,8 @@ ChangePreview is **free**. Every feature works with no license key, Buy button, 
 5. Select the repository folder (the one containing `manifest.json`)
 6. The ChangePreview icon (Δ) should appear in your toolbar
 
+To build a zip or a `change-preview-release/stage` folder, run `npm run stage` and pack `dist/extension`. Do **not** copy only `manifest.json`, `background.js`, `content/`, `panel/`, and `icons/` — `panel/panel.js` imports `ensure-content-script.js` from the repo root. The service worker (`background.js`) is a classic script with **no** `import` and **no** `background.type: module`; keep it. Omitting the helper file still breaks the side panel.
+
 ## Usage
 
 1. Navigate to any form-based page (or open `fixtures/plain-admin.html` for testing)
@@ -168,8 +170,8 @@ This is a Manifest V3 Chrome extension. The structure is:
 
 ```
 ├── manifest.json              # Extension manifest (no host_permissions / content_scripts)
-├── background.js              # Service worker (injects on action click)
-├── ensure-content-script.js   # Ping-or-inject helper (activeTab + scripting)
+├── background.js              # Classic MV3 service worker (no import; helper inlined)
+├── ensure-content-script.js   # Panel ES module — MUST be in every zip / unpacked load
 ├── content/
 │   └── content.js             # Content script (injected on demand, all frames)
 ├── panel/
@@ -177,6 +179,9 @@ This is a Manifest V3 Chrome extension. The structure is:
 │   ├── panel.css       # Side panel styles
 │   └── panel.js        # Side panel logic
 ├── icons/              # Extension icons
+├── scripts/
+│   ├── extension-files.mjs    # Canonical ship list (includes ensure-content-script.js)
+│   └── stage-extension.mjs    # Copies the ship list to dist/extension
 └── fixtures/
     ├── plain-admin.html         # Basic admin settings test page
     ├── ms-forms-like.html       # Microsoft Forms-like test page

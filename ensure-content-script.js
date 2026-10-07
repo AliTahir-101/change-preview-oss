@@ -1,6 +1,13 @@
 /**
  * On-demand content-script injection (activeTab + scripting).
  *
+ * SHIP THIS FILE. panel/panel.js imports it as an ES module. Omitting it from
+ * an unpacked folder or CWS zip breaks the side panel (inject-then-message).
+ * Use `npm run stage` (see scripts/stage-extension.mjs).
+ *
+ * background.js is a classic (non-module) service worker and inlines the same
+ * helpers — it must NOT import this file. Keep the two copies in sync.
+ *
  * ChangePreview does not declare host_permissions or a static content_scripts
  * match pattern. The content script is injected only after the user opens the
  * extension on a page. Subsequent messages reuse the injected script until the
