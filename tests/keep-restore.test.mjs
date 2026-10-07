@@ -34,11 +34,29 @@ function check(name, cond, detail) {
 }
 
 const store = {};
+let fieldsListener = null;
+const TAB = { id: 42, url: 'https://agentreshta.example/member/profile/preferences', windowId: 1 };
+let getFieldsResponse = {
+  host: 'agentreshta.example',
+  path: '/member/profile/preferences',
+  url: TAB.url,
+  dirty: [],
+  allFieldKeys: ['name:a'],
+  coverage: { tracked: 1, total: 1, skipped: 0 }
+};
 const chromeStub = {
-  runtime: { lastError: null, onMessage: { addListener() {} }, sendMessage() { return Promise.resolve(); } },
+  runtime: {
+    lastError: null,
+    onMessage: { addListener(fn) { fieldsListener = fn; } },
+    sendMessage() { return Promise.resolve(); }
+  },
   tabs: {
-    query() { return Promise.resolve([]); },
-    sendMessage() { return Promise.resolve(); },
+    query() { return Promise.resolve([TAB]); },
+    get(id) { return Promise.resolve(id === TAB.id ? TAB : null); },
+    sendMessage(tabId, msg) {
+      if (msg && msg.type === 'GET_FIELDS') return Promise.resolve(getFieldsResponse);
+      return Promise.resolve({ success: true });
+    },
     onActivated: { addListener() {} },
     onUpdated: { addListener() {} }
   },
@@ -167,6 +185,108 @@ console.log('\nisDetectionKeyForPage does not match a different path on the same
       { pageKey: 'https://nodes.example/other' },
       PAGE
     ) === false);
+}
+
+/* ------------------------------------------------------------------ */
+console.log('\nsameLogicalPage: URL settle vs a different form');
+{
+  const prefs = 'https://agentreshta.example/member/profile/preferences';
+  check('identical keys match', I.sameLogicalPage(prefs, prefs));
+  check('added query after load is still the same page',
+    I.sameLogicalPage(prefs, prefs + '?tab=alerts'));
+  check('trailing-slash canonicalize is already equal',
+    I.sameLogicalPage(I.canonicalizePageUrl(prefs + '/'), prefs));
+  check('distinct formId queries stay separate',
+    I.sameLogicalPage('https://ex.com/form?formId=1', 'https://ex.com/form?formId=2') === false);
+  check('different paths stay separate',
+    I.sameLogicalPage(prefs, 'https://agentreshta.example/member/profile/account') === false);
+}
+
+/* ------------------------------------------------------------------ */
+console.log('\nKeep restore survives post-reload scan/hydration (no flash-then-clear)');
+{
+  const prefs = 'https://agentreshta.example/member/profile/preferences';
+  const kept = [{ key: 'name:tz', label: 'Timezone', type: 'select', was: 'UTC', now: 'ET' }];
+  const hostInfo = dom.window.document.getElementById('hostInfo');
+  const changesBody = dom.window.document.getElementById('changesBody');
+  const tick = () => new Promise((r) => setTimeout(r, 0));
+
+  await I.saveDetections({
+    host: 'agentreshta.example',
+    path: '/member/profile/preferences',
+    url: prefs,
+    dirty: kept
+  }, I.createFingerprint(prefs, ['name:tz']));
+
+  I.setActiveTabId(TAB.id);
+  I.setJustReloaded(true);
+  getFieldsResponse = {
+    host: 'agentreshta.example', path: '/member/profile/preferences', url: prefs,
+    dirty: [], allFieldKeys: ['name:tz'], coverage: { tracked: 1, total: 1, skipped: 0 }
+  };
+  await I.refreshData(TAB.id);
+  await tick();
+  check('reload restores Keep rows', I.isShowingRestored() === true && changesBody.querySelectorAll('tr').length === 1,
+    `restored=${I.isShowingRestored()} rows=${changesBody.querySelectorAll('tr').length}`);
+
+  // Empty baseline scan (content script snapshot after reload).
+  await fieldsListener({
+    type: 'FIELDS_UPDATE',
+    data: {
+      host: 'agentreshta.example', path: '/member/profile/preferences', url: prefs,
+      dirty: [], allFieldKeys: ['name:tz'], coverage: { tracked: 1, total: 1, skipped: 0 },
+      trigger: 'scan'
+    }
+  }, { tab: TAB });
+  await tick();
+  check('empty scan does not clear restored rows',
+    I.isShowingRestored() === true && changesBody.querySelectorAll('tr').length === 1);
+
+  // Hydration scan that looks dirty (the 1–2s flash Ali saw).
+  await fieldsListener({
+    type: 'FIELDS_UPDATE',
+    data: {
+      host: 'agentreshta.example', path: '/member/profile/preferences', url: prefs + '?tab=1',
+      dirty: [
+        { key: 'name:a', label: 'A', was: '(new field)', now: '1', type: 'text' },
+        { key: 'name:b', label: 'B', was: '(new field)', now: '2', type: 'text' }
+      ],
+      allFieldKeys: ['name:a', 'name:b'], coverage: { tracked: 2, total: 2, skipped: 0 },
+      trigger: 'scan'
+    }
+  }, { tab: TAB });
+  await tick();
+  check('hydration dirty scan does not replace Keep rows',
+    I.isShowingRestored() === true && changesBody.querySelectorAll('tr').length === 1,
+    `rows=${changesBody.querySelectorAll('tr').length} restored=${I.isShowingRestored()}`);
+  check('Keep snapshot is not overwritten by hydration',
+    I.getPersistedData()?.dirty?.length === 1);
+
+  // 2s poll equivalent: live still empty / dirty scan.
+  getFieldsResponse = {
+    host: 'agentreshta.example', path: '/member/profile/preferences', url: prefs + '?tab=1',
+    dirty: [{ key: 'name:a', label: 'A', was: '(new field)', now: '1', type: 'text' }],
+    allFieldKeys: ['name:a'], coverage: { tracked: 1, total: 1, skipped: 0 }
+  };
+  await I.refreshData(TAB.id);
+  await tick();
+  check('refreshData poll on settled URL still holds Keep rows',
+    I.isShowingRestored() === true && changesBody.querySelectorAll('tr').length === 1);
+
+  // Trusted user edit ends restore and shows live dirty.
+  await fieldsListener({
+    type: 'FIELDS_UPDATE',
+    data: {
+      host: 'agentreshta.example', path: '/member/profile/preferences', url: prefs,
+      dirty: [{ key: 'name:tz', label: 'Timezone', was: 'UTC', now: 'PT', type: 'select' }],
+      allFieldKeys: ['name:tz'], coverage: { tracked: 1, total: 1, skipped: 0 },
+      trigger: 'user-input'
+    }
+  }, { tab: TAB });
+  await tick();
+  check('trusted user-input ends Keep restore and shows the live row',
+    I.isShowingRestored() === false && /Timezone/.test(changesBody.textContent),
+    `restored=${I.isShowingRestored()} text=${changesBody.textContent}`);
 }
 
 /* ------------------------------------------------------------------ */
