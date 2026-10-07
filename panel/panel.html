@@ -7,7 +7,79 @@
   <link rel="stylesheet" href="panel.css">
 </head>
 <body>
-  <div class="panel">
+  <!-- Unlock Screen (shown when not licensed) -->
+  <div class="unlock-screen hidden" id="unlockScreen">
+    <div class="unlock-header">
+      <h1 class="unlock-title">🔒 ChangePreview</h1>
+      <p class="unlock-subtitle">Unlock full features</p>
+    </div>
+    
+    <div class="unlock-preview">
+      <p class="unlock-preview-label">Preview mode active</p>
+      <p class="unlock-preview-hint">You can see what changed, but editing tools require activation.</p>
+    </div>
+    
+    <div class="unlock-features">
+      <div class="unlock-feature">
+        <span class="feature-icon">✓</span>
+        <span class="feature-text">Keep changes after reload</span>
+      </div>
+      <div class="unlock-feature">
+        <span class="feature-icon">✓</span>
+        <span class="feature-text">Reapply saved changes</span>
+      </div>
+      <div class="unlock-feature">
+        <span class="feature-icon">✓</span>
+        <span class="feature-text">Clear detections</span>
+      </div>
+      <div class="unlock-feature">
+        <span class="feature-icon">✓</span>
+        <span class="feature-text">Export to Markdown & CSV</span>
+      </div>
+    </div>
+    
+    <div class="unlock-pricing">
+      <span class="unlock-price" id="unlockPrice">€9.99</span>
+      <span class="unlock-term">one-time payment</span>
+    </div>
+    
+    <button class="btn btn-primary unlock-buy-btn" id="buyBtn">
+      <span class="btn-icon">🛒</span> Buy License
+    </button>
+    
+    <div class="unlock-divider">
+      <span>or</span>
+    </div>
+    
+    <div class="unlock-form">
+      <p class="unlock-form-label">Already have a license key?</p>
+      <div class="unlock-input-row">
+        <input 
+          type="text" 
+          id="licenseKeyInput" 
+          class="unlock-input" 
+          placeholder="XXXX-XXXX-XXXX-XXXX"
+          maxlength="19"
+          autocomplete="off"
+          spellcheck="false"
+        >
+        <button class="btn btn-secondary unlock-activate-btn" id="activateBtn">
+          Activate
+        </button>
+      </div>
+      <p class="unlock-error hidden" id="unlockError"></p>
+    </div>
+    
+    <div class="unlock-footer">
+      <p class="unlock-seller">Sold by <span id="sellerName">NextGen Folks</span></p>
+      <p class="unlock-support">
+        <a href="#" id="supportLink">Support</a> · 
+        <a href="#" id="privacyLink">Privacy</a>
+      </p>
+    </div>
+  </div>
+
+  <div class="panel" id="mainPanel">
     <header class="header">
       <div class="header-row">
         <div class="header-main">
@@ -109,6 +181,6 @@
 
   <div class="toast" id="toast"></div>
 
-  <script src="panel.js"></script>
+  <script type="module" src="panel.js"></script>
 </body>
 </html>
