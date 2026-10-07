@@ -815,6 +815,9 @@
         host: location.hostname,
         path: location.pathname,
         dirty: dirty,
+        // Include ALL field keys so the panel builds a STABLE fingerprint.
+        // Without this, save (dirty keys only) and restore (all keys) mismatch.
+        allFieldKeys: Array.from(baseline.keys()),
         coverage: {
           tracked: baseline.size,
           total: totalFieldsScanned,

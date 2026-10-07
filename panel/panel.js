@@ -755,7 +755,29 @@ async function savePersistSetting(enabled) {
   try {
     await chrome.storage.local.set({ persistEnabled: enabled });
     persistEnabled = enabled;
-    if (!enabled) {
+    
+    if (enabled) {
+      // CRITICAL FIX: User may have already edited the form BEFORE ticking Keep.
+      // Those detections exist only in-memory (nothing was saved while Keep was OFF).
+      // Immediately snapshot the current live detections to storage so they survive reload.
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (tab?.id) {
+        try {
+          const response = await chrome.tabs.sendMessage(tab.id, { type: 'GET_FIELDS' });
+          if (response?.dirty?.length > 0) {
+            const fieldKeys = (response.dirty || []).map(f => f.key);
+            const allFieldKeys = response.allFieldKeys || fieldKeys;
+            currentFingerprint = createFingerprint(response.host, response.path, allFieldKeys);
+            // We're saving fresh data, so any old cleared marker for this page is stale
+            await removePageClearedMarker(response.host, response.path);
+            await saveDetections(response, currentFingerprint);
+            persistedData = { dirty: response.dirty, fingerprint: currentFingerprint };
+          }
+        } catch (msgErr) {
+          // Content script may not be ready - that's OK, future edits will save
+        }
+      }
+    } else {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
       let host = null;
       let path = null;
@@ -1033,7 +1055,23 @@ chrome.runtime.onMessage.addListener(async (message) => {
         persistedData = { dirty: data.dirty };
         saveDetections(data, currentFingerprint);
       }
-    } else if (!justReloaded) {
+      
+      updateUI(data);
+      updateReapplyVisibility();
+      return;
+    }
+    
+    // Empty dirty update (no changes in form right now)
+    
+    // CRITICAL FIX: After a page reload, the content script re-snapshots and fires
+    // an EMPTY FIELDS_UPDATE. If we're showing restored data, this empty update would
+    // wipe it. Ignore empty updates while showing restored data - the form is reset
+    // and we're intentionally displaying the saved snapshot (with Reapply offered).
+    if (isShowingRestoredData) {
+      return;
+    }
+    
+    if (!justReloaded) {
       // Dirty is empty AND we've seen edits this session = user undid all changes
       // This is clean state, NOT Reapply case. Clear restored flags.
       isShowingRestoredData = false;
@@ -1053,8 +1091,14 @@ chrome.tabs.onActivated.addListener(async () => {
 });
 
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
+  // Set justReloaded as EARLY as possible (on 'loading') so the periodic
+  // refreshData interval can't race ahead and show empty during a reload.
+  // This is the signal that the page navigated/reloaded = form will be reset,
+  // so restoring from a saved snapshot is legitimate (not an undo).
+  if (changeInfo.status === 'loading') {
+    justReloaded = true;
+  }
   if (changeInfo.status === 'complete') {
-    // Page reloaded - reset to allow Reapply if persisted data exists
     justReloaded = true;
     await refreshData();
     await updateReapplyVisibility();
