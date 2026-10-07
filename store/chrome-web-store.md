@@ -170,6 +170,6 @@ Support / feedback contact: info@nextgenfolks.com
 | Support | mailto:info@nextgenfolks.com |
 | Privacy Policy | https://nextgenfolks.com/privacy |
 
-## Release 0.4.4
+## Release 0.4.5
 
 Automatic HTTP/HTTPS page-load tracking is restored. The panel need not be opened before editing. Toolbar fallback and packaging fixes remain. Automated regression suites pass; Ali confirmed live behavior. The upload directory contains versioned package, detailed description, permission justifications, and reviewer test instructions. The corrected website privacy policy is live. Header, tooltips, explicit copy controls, and Keep/reload regressions are covered in this release.

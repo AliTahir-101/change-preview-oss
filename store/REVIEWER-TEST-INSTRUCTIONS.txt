@@ -1,4 +1,4 @@
-ChangePreview 0.4.4 reviewer test
+ChangePreview 0.4.5 reviewer test
 
 No account, payment, or license key is required.
 1. Install the extension and allow site access on the test site.

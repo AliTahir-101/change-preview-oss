@@ -204,3 +204,7 @@ MIT
 Version 0.4.1 removed automatic page-load tracking, making it impossible to compare edits made before a toolbar click. Static HTTP/HTTPS content scripts now capture baselines and detect edits with the panel closed, including on fresh navigations and in matching frames. The 0.4.3 toolbar startup fixes remain as a fallback. Opening the panel does not reset an existing baseline.
 
 After updating an unpacked installation, reload ChangePreview in `chrome://extensions`, approve the site access requested by Chrome, and refresh existing pages before editing. Keep the panel closed, edit a field, then open it or click Save to review the captured change.
+
+## 0.4.5 tab-switch recovery fix
+
+The page tracker now remembers a live editing session across tab/window switches and after undo. Returning to an unchanged document no longer offers Reapply for edits already on the form. A genuine reload creates a fresh tracker and retains saved-change recovery. Reload the extension and refresh existing pages after updating.

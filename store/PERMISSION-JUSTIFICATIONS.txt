@@ -1,4 +1,4 @@
-ChangePreview 0.4.4 - CWS Privacy tab
+ChangePreview 0.4.5 - CWS Privacy tab
 
 SINGLE PURPOSE
 Help users review and export changes to web forms before saving, with automatic local comparison of original and edited values.
@@ -28,4 +28,4 @@ PRIVACY POLICY
 https://nextgenfolks.com/privacy
 
 IMPORTANT
-The automatic content-script match patterns request broad website access even though there is no separate host_permissions key. Replace old activeTab-only or leave-host-justification-blank copy. The corrected 0.4.4 privacy policy is live (verified 8 October 2026).
+The automatic content-script match patterns request broad website access even though there is no separate host_permissions key. Replace old activeTab-only or leave-host-justification-blank copy. The corrected 0.4.5 privacy policy is live (verified 8 October 2026).

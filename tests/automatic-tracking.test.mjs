@@ -7,6 +7,12 @@ async function loadPage() {
   const w = dom.window;
   let listener;
   const messages = [];
+  let inputHandler;
+  const addListener = w.document.addEventListener.bind(w.document);
+  w.document.addEventListener = (type, handler, options) => {
+    if (type === 'input') inputHandler = handler;
+    return addListener(type, handler, options);
+  };
   w.CSS = { escape: value => String(value).replace(/[^a-zA-Z0-9_-]/g, c => '\\' + c) };
   Object.defineProperty(w.HTMLElement.prototype, 'offsetParent', { get() { return this.isConnected ? this.parentElement : null; } });
   w.chrome = {
@@ -18,14 +24,17 @@ async function loadPage() {
   w.eval(source);
   await new Promise(resolve => setTimeout(resolve, 450));
   const report = () => { let result; listener({ type: 'GET_FIELDS' }, {}, value => { result = value; }); return result; };
-  return { dom, w, messages, report };
+  return { dom, w, messages, report, trustedEdit: () => inputHandler({ isTrusted: true }) };
 }
 for (const phase of ['initial navigation', 'reload / next navigation']) {
-  const { dom, w, messages, report } = await loadPage();
+  const { dom, w, messages, report, trustedEdit } = await loadPage();
   try {
     assert.equal(report().dirty.length, 0);
+    assert.equal(report().hasLiveSession, false, 'new documents start without a live edit session');
     const input = w.document.getElementById('size');
     input.value = '45';
+    trustedEdit();
+    assert.equal(report().hasLiveSession, true, 'trusted input records a live session before the panel opens');
     input.dispatchEvent(new w.Event('input', { bubbles: true }));
     input.dispatchEvent(new w.Event('change', { bubbles: true }));
     await new Promise(resolve => setTimeout(resolve, 350));
@@ -39,6 +48,9 @@ for (const phase of ['initial navigation', 'reload / next navigation']) {
     w.document.getElementById('save').dispatchEvent(event);
     assert.equal(event.defaultPrevented, true);
     assert.ok(w.document.getElementById('changepreview-overlay-host'));
+    input.value = '30';
+    trustedEdit();
+    assert.equal(report().hasLiveSession, true, 'undo keeps the current live session');
     console.log('PASS: ' + phase + ' captures edits, updates badge and confirms Save with panel closed');
   } finally { dom.window.close(); }
 }

@@ -332,8 +332,20 @@ console.log('\nKeep restore survives post-reload scan/hydration (no flash-then-c
   check('both exports create downloads', downloads.length === 2 && downloads[0].endsWith('.csv') && downloads[1].endsWith('.md'));
   await activatedListener({ tabId: TAB.id });
   check('same-tab activation does not trigger restore', !I.isShowingRestored() && reapply.classList.contains('hidden'));
+  // The same edited document survives switching away and back, even with no
+  // dirty rows after Undo. A genuine reload returns a fresh session instead.
+  getFieldsResponse.hasLiveSession = true;
+  for (const dirty of [getFieldsResponse.dirty, []]) {
+    getFieldsResponse = { ...getFieldsResponse, dirty };
+    await activatedListener({ tabId: 99 });
+    await activatedListener({ tabId: TAB.id });
+    check('returning to a live tab does not offer Reapply (' + dirty.length + ' edits)', !I.isShowingRestored() && reapply.classList.contains('hidden'));
+    await activatedListener({ tabId: 99 });
+    await focusListener(TAB.windowId);
+    check('returning to a live window does not offer Reapply', !I.isShowingRestored() && reapply.classList.contains('hidden'));
+  }
   await updatedListener(TAB.id, { status: 'loading' });
-  getFieldsResponse = { ...getFieldsResponse, dirty: [] };
+  getFieldsResponse = { ...getFieldsResponse, hasLiveSession: false, dirty: [] };
   await updatedListener(TAB.id, { status: 'complete' });
   check('actual reload still offers saved changes', I.isShowingRestored() && !reapply.classList.contains('hidden'));
 }
