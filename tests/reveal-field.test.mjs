@@ -91,6 +91,11 @@ console.log('\nREVEAL_FIELD message: locate a top-document field');
   const listener = getMessageListener();
   check('content.js registered an onMessage listener', typeof listener === 'function');
 
+  let ping = null;
+  listener({ type: 'PING' }, {}, (r) => { ping = r; });
+  check('PING responds ok:true so on-demand inject can skip a second insert', ping && ping.ok === true,
+    JSON.stringify(ping));
+
   let response = null;
   listener({ type: 'REVEAL_FIELD', key: 'name:email' }, {}, (r) => { response = r; });
   check('reveal responds found:true for a real field', response && response.found === true,

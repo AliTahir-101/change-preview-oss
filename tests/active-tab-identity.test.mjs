@@ -69,6 +69,8 @@ let onActivatedListener = null;
 let onUpdatedListener = null;
 let onFocusChangedListener = null;
 
+const sentMessages = [];
+
 const chromeStub = {
   runtime: {
     lastError: null,
@@ -79,6 +81,8 @@ const chromeStub = {
     query() { queryCount++; return Promise.resolve([activeTabForQuery]); },
     get(tabId) { return Promise.resolve(TABS[tabId] || null); },
     sendMessage(tabId, msg) {
+      sentMessages.push({ tabId, type: msg && msg.type });
+      if (msg && msg.type === 'PING') return Promise.resolve({ ok: true });
       if (msg && msg.type === 'GET_FIELDS') return Promise.resolve(fieldResponses[tabId] || null);
       return Promise.resolve({ success: true });
     },
@@ -122,6 +126,11 @@ check('panel registered an onUpdated listener', typeof onUpdatedListener === 'fu
 // Bind the panel to the Forms tab (as if the user activated it).
 await onActivatedListener({ tabId: FORMS_TAB });
 await tick();
+const firstPing = sentMessages.findIndex((m) => m.type === 'PING' && m.tabId === FORMS_TAB);
+const firstGet = sentMessages.findIndex((m) => m.type === 'GET_FIELDS' && m.tabId === FORMS_TAB);
+check('refresh pings the content script before GET_FIELDS (inject-then-message)',
+  firstPing !== -1 && firstGet !== -1 && firstPing < firstGet,
+  `order=${JSON.stringify(sentMessages)}`);
 check('panel bound to the active (Forms) tab', hostInfo.textContent === 'forms.cloud.microsoft',
   `host=${hostInfo.textContent}`);
 check('active tab starts with no changes', /0 changes/.test(changeCount.textContent),
@@ -255,6 +264,44 @@ check('WINDOW_ID_NONE focus event is ignored', hostInfo.textContent === 'forms.c
   `host=${hostInfo.textContent}`);
 
 /* ------------------------------------------------------------------ */
+const originalSendMessage = chromeStub.tabs.sendMessage;
+chromeStub.tabs.sendMessage = async () => { throw new Error('Receiving end does not exist'); };
+await onActivatedListener({ tabId: FORMS_TAB });
+check('missing access shows an actionable tracking status',
+  document.getElementById('trackingStatus').textContent.includes('Allow ChangePreview access to this site'));
+chromeStub.tabs.sendMessage = originalSendMessage;
+await onActivatedListener({ tabId: FORMS_TAB });
+check('tracking status recovers after toolbar access',
+  document.getElementById('trackingStatus').textContent.startsWith('Tracking this page'));
+fieldResponses[FORMS_TAB].dirty = [{ key: 'choice', label: 'Choice', was: 'No', now: 'Yes', type: 'checkbox' }];
+await onActivatedListener({ tabId: FORMS_TAB });
+const choiceIcon = document.querySelector('.field-type-icon');
+choiceIcon.getBoundingClientRect = () => ({ top: 200, left: 40, width: 16, height: 16, right: 56, bottom: 216 });
+choiceIcon.dispatchEvent(new dom.window.MouseEvent('pointerover', { bubbles: true }));
+const tooltip = document.getElementById('fieldTooltip');
+check('choice tooltip appears above its target', !tooltip.hidden && parseFloat(tooltip.style.top) < 200);
+check('choice row has no competing native tooltip', !choiceIcon.closest('tr').hasAttribute('title'));
+document.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Escape' }));
+check('Escape dismisses choice tooltip', tooltip.hidden);
+let copied = [];
+Object.defineProperty(globalThis.navigator, 'clipboard', { configurable: true, value: { writeText: async text => copied.push(text) } });
+const firstRow = document.querySelector('.change-row');
+firstRow.querySelector('.field-label').click();
+firstRow.querySelector('.value-text').click();
+await tick();
+check('clicking plain text does not copy or locate', copied.length === 0 && !firstRow.classList.contains('row-locating'));
+firstRow.querySelector('.field-label-wrapper .copy-btn').click();
+firstRow.querySelector('.value-cell-wrapper .copy-btn').click();
+await tick();
+check('explicit copy buttons copy the field name and value', copied.join('|') === 'Choice|No');
+firstRow.querySelector('.locate-btn').click();
+await tick();
+check('dedicated locate button highlights the row', firstRow.classList.contains('row-locating'));
+check('tracking status occurs once inside the header', document.querySelectorAll('#trackingStatus').length === 1 && !!document.querySelector('header #trackingStatus'));
+fieldResponses[FORMS_TAB].url = 'https://forms.cloud.microsoft/formedit?form=example#section';
+await onActivatedListener({ tabId: FORMS_TAB });
+hostInfo.dispatchEvent(new dom.window.FocusEvent('focusin', { bubbles: true }));
+check('page reference exposes the full URL on keyboard focus', !tooltip.hidden && tooltip.textContent === fieldResponses[FORMS_TAB].url);
 console.log('');
 if (failed === 0) {
   console.log(`All ${passed} checks passed.`);

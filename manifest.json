@@ -1,10 +1,11 @@
 {
   "manifest_version": 3,
   "name": "ChangePreview",
-  "version": "0.4.0",
-  "description": "See form changes before you save: compare Was vs Now, export to Markdown or CSV, keep edits locally. Private, nothing uploaded.",
+  "version": "0.4.4",
+  "description": "Review form changes before you save. Compare old and new values, recover saved edits after a refresh, and export your changes.",
   "permissions": [
     "activeTab",
+    "scripting",
     "storage",
     "sidePanel"
   ],
@@ -21,17 +22,8 @@
     "default_path": "panel/panel.html"
   },
   "background": {
-    "service_worker": "background.js",
-    "type": "module"
+    "service_worker": "background.js"
   },
-  "content_scripts": [
-    {
-      "matches": ["<all_urls>"],
-      "js": ["content/content.js"],
-      "run_at": "document_idle",
-      "all_frames": true
-    }
-  ],
   "icons": {
     "16": "icons/icon16.png",
     "32": "icons/icon32.png",
@@ -45,5 +37,18 @@
       },
       "description": "Open ChangePreview panel"
     }
-  }
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ],
+      "js": [
+        "content/content.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ]
 }

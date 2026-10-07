@@ -743,3 +743,174 @@ body {
   opacity: 1;
 }
 
+
+/* Keep tracking feedback centered and readable, including wrapped messages. */
+#trackingStatus {
+  padding: 10px 16px;
+  text-align: center;
+  line-height: 1.5;
+}
+
+/* The change list keeps native scrolling with a theme-matched scrollbar. */
+.main::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.main::-webkit-scrollbar-track {
+  background: var(--bg-secondary);
+  border-radius: 999px;
+}
+
+.main::-webkit-scrollbar-thumb {
+  min-height: 32px;
+  background: var(--text-muted);
+  border: 2px solid var(--bg-secondary);
+  border-radius: 999px;
+}
+
+.main::-webkit-scrollbar-thumb:hover {
+  background: var(--text-secondary);
+}
+
+.main::-webkit-scrollbar-thumb:active {
+  background: var(--accent);
+}
+
+.main::-webkit-scrollbar-corner {
+  background: var(--bg-secondary);
+}
+
+@supports not selector(::-webkit-scrollbar) {
+  .main {
+    scrollbar-width: thin;
+    scrollbar-color: var(--text-muted) var(--bg-secondary);
+  }
+}
+
+/* Preserve system contrast and sizing for high-contrast mode. */
+@media (forced-colors: active) {
+  .main {
+    scrollbar-width: auto;
+    scrollbar-color: auto;
+  }
+
+  .main::-webkit-scrollbar {
+    width: auto;
+    height: auto;
+  }
+
+  .main::-webkit-scrollbar-track,
+  .main::-webkit-scrollbar-corner {
+    background: Canvas;
+  }
+
+  .main::-webkit-scrollbar-thumb,
+  .main::-webkit-scrollbar-thumb:hover,
+  .main::-webkit-scrollbar-thumb:active {
+    background: CanvasText;
+    border-color: Canvas;
+  }
+}
+
+/* Leave room above the switches for help text inside the panel viewport. */
+.header-row {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.header-toggles {
+  position: relative;
+  flex-direction: row;
+  justify-content: flex-end;
+  padding-top: 0;
+}
+
+.toggle-tooltip {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  z-index: 20;
+  width: min(280px, calc(100vw - 32px));
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  box-shadow: 0 4px 16px rgb(0 0 0 / 18%);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.4;
+  text-align: left;
+  white-space: normal;
+  cursor: default;
+  visibility: hidden;
+  opacity: 0;
+}
+
+.header-toggles:not(.tooltips-dismissed) .header-toggle:hover .toggle-tooltip,
+.header-toggles:not(.tooltips-dismissed) .header-toggle:focus-within .toggle-tooltip {
+  visibility: visible;
+  opacity: 1;
+}
+
+/* Keep a hovered tooltip reachable across the gap above the switch. */
+.toggle-tooltip::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 0;
+  width: 100%;
+  height: 8px;
+}
+
+/* Pointer help takes precedence when a different switch has keyboard focus. */
+.header-toggles:has(.header-toggle:hover) .header-toggle:not(:hover) .toggle-tooltip {
+  visibility: hidden;
+  opacity: 0;
+}
+
+.toggle-tooltip { right: auto; left: 0; }
+.field-type-icon::before, .field-type-icon::after { content: none; }
+.panel-tooltip {
+  position: fixed;
+  z-index: 1000;
+  max-width: calc(100vw - 16px);
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--text);
+  color: var(--bg);
+  font-size: 12px;
+  line-height: 1.4;
+  box-shadow: 0 4px 12px rgb(0 0 0 / 18%);
+  pointer-events: none;
+}
+.panel-tooltip[hidden] { display: none; }
+
+/* Centered identity, page context, then a compact controls section. */
+.header { padding: 18px 16px 12px; }
+.header-row { margin-bottom: 12px; }
+.header-main { flex-direction: column; align-items: center; gap: 0; text-align: center; }
+.title { display: flex; align-items: center; gap: 12px; width: 100%; justify-content: center; font-size: 18px; font-weight: 650; letter-spacing: -.3px; }
+.title::before, .title::after { content: ''; height: 1px; background: var(--border); flex: 1; max-width: 64px; }
+#trackingStatus { margin: 7px 0 0; padding: 0; font-size: 12px; line-height: 1.5; color: var(--text-secondary); }
+.local-note { margin: 2px 0 10px; font-size: 11px; color: var(--text-secondary); }
+.page-reference { display: flex; align-items: center; gap: 8px; max-width: 100%; min-width: 0; padding: 4px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); }
+.page-reference-label { font-size: 9px; font-weight: 600; letter-spacing: .8px; color: var(--text-secondary); flex-shrink: 0; }
+.host { min-width: 0; max-width: 100%; font-size: 12px; cursor: help; }
+.host:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+.header-meta { justify-content: space-between; flex-wrap: wrap; gap: 4px 12px; padding-top: 10px; border-top: 1px solid var(--border); margin-bottom: 8px; }
+.coverage { color: var(--text-secondary); }
+.header-toggles { justify-content: center; flex-wrap: wrap; gap: 6px; }
+.header-toggle { padding: 4px 8px; font-size: 11px; color: var(--text-secondary); }
+.toggle-tooltip { left: 50%; transform: translateX(-50%); }
+.panel-tooltip { overflow-wrap: anywhere; max-height: calc(100vh - 16px); overflow: hidden; }
+
+.change-row { cursor: default; }
+.field-label, .value-text { cursor: text; user-select: text; }
+.value-text:hover { opacity: 1; }
+.field-label-wrapper .copy-btn { flex-shrink: 0; }
+.locate-btn { font: inherit; color: var(--text-secondary); background: none; border: 1px solid var(--border); border-radius: 4px; min-width: 24px; min-height: 24px; cursor: pointer; }
+.locate-btn:hover { color: var(--accent); border-color: var(--accent); }
+.value-action-btn:focus-visible, .locate-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

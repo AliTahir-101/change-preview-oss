@@ -13,7 +13,7 @@ ChangePreview is **free**. Every feature works with no license key, Buy button, 
 - **Side panel UI** — Shows only dirty fields with old vs new values
 - **Soft Save confirm** — Modal appears when you click Save/Submit/Update with pending changes
 - **Confirm on save toggle** — A header checkbox turns the save/submit confirmation dialog off; change detection and the side panel keep working for information only
-- **Click to locate** — Click a change row to scroll to and briefly highlight that control on the page (works in same-origin frames too); copying Was/Now still works via the value/label click
+- **Click to locate** — Click the numbered button beside a change to scroll to and briefly highlight that control on the page (works in same-origin frames too). Use the copy buttons for field names and Was/Now values; text stays selectable
 - **Copy Markdown / CSV** — One-click export for change documentation
 - **Coverage meter** — Honest about what fields are being tracked
 - **Privacy-first** — All data stays local; passwords and sensitive fields are skipped
@@ -29,16 +29,20 @@ ChangePreview is **free**. Every feature works with no license key, Buy button, 
 5. Select the repository folder (the one containing `manifest.json`)
 6. The ChangePreview icon (Δ) should appear in your toolbar
 
+To build a zip or a `change-preview-release/stage` folder, run `npm run stage` and pack `dist/extension`. Do **not** copy only `manifest.json`, `background.js`, `content/`, `panel/`, and `icons/` — `panel/panel.js` imports `ensure-content-script.js` from the repo root. The service worker (`background.js`) is a classic script with **no** `import` and **no** `background.type: module`; keep it. Omitting the helper file still breaks the side panel.
+
 ## Usage
 
 1. Navigate to any form-based page (or open `fixtures/plain-admin.html` for testing)
-2. The extension automatically snapshots all visible form fields
-3. Make changes to the form
+2. The extension automatically snapshots visible form fields on permitted web pages
+3. Make changes to the form; the panel does not need to be open
 4. The badge shows the number of changed fields
-5. Click the extension icon (or press `Alt+Shift+C`) to open the side panel
+5. Open the side panel with the toolbar icon (or `Alt+Shift+C`) whenever you want to review
 6. Review changes in the "Field | Was | Now" table
 7. Click **Copy Markdown** or **Copy CSV** to export
 8. When you click Save/Submit, a confirmation modal shows what's about to change
+
+Automatic tracking runs on HTTP/HTTPS pages where Chrome grants site access, including matching frames and fresh navigations. Set Chrome site access to all sites for automatic tracking throughout normal browsing, or choose specific sites. Restricted browser pages cannot be tracked. After updating the extension, refresh already-open pages before editing. Local file URLs are not included; serve fixtures over localhost.
 
 ## Test Fixtures
 
@@ -153,26 +157,31 @@ The extension uses fail-soft behavior: when it can't track everything, it tells 
 
 ## Permissions
 
-- `activeTab` — Access the current tab to read form fields
+- `activeTab` — Access the current tab after you click the icon / shortcut
+- `scripting` — Inject `content/content.js` into that tab (all frames) on demand
 - `storage` — Store settings locally
 - `sidePanel` — Display the side panel UI
 
-No network permissions required.
+Automatic `content_scripts` match HTTP/HTTPS pages and require Chrome site access. This is broad website access even though there is no separate `host_permissions` key. It is needed to capture original values before the first edit without a toolbar click. Data remains local. The toolbar injection helper is only a fallback.
 
 ## Development
 
 This is a Manifest V3 Chrome extension. The structure is:
 
 ```
-├── manifest.json       # Extension manifest
-├── background.js       # Service worker
+├── manifest.json              # Extension manifest (automatic HTTP(S) content scripts)
+├── background.js              # Classic MV3 service worker (no import; helper inlined)
+├── ensure-content-script.js   # Panel ES module — MUST be in every zip / unpacked load
 ├── content/
-│   └── content.js      # Content script (field detection, save intercept)
+│   └── content.js             # Content script (automatic page-load tracking, all frames)
 ├── panel/
 │   ├── panel.html      # Side panel markup
 │   ├── panel.css       # Side panel styles
 │   └── panel.js        # Side panel logic
 ├── icons/              # Extension icons
+├── scripts/
+│   ├── extension-files.mjs    # Canonical ship list (includes ensure-content-script.js)
+│   └── stage-extension.mjs    # Copies the ship list to dist/extension
 └── fixtures/
     ├── plain-admin.html         # Basic admin settings test page
     ├── ms-forms-like.html       # Microsoft Forms-like test page
@@ -189,3 +198,9 @@ The `worker/` directory is **legacy / unused**. It is leftover Stripe + Cloudfla
 ## License
 
 MIT
+
+## 0.4.4 automatic tracking restored
+
+Version 0.4.1 removed automatic page-load tracking, making it impossible to compare edits made before a toolbar click. Static HTTP/HTTPS content scripts now capture baselines and detect edits with the panel closed, including on fresh navigations and in matching frames. The 0.4.3 toolbar startup fixes remain as a fallback. Opening the panel does not reset an existing baseline.
+
+After updating an unpacked installation, reload ChangePreview in `chrome://extensions`, approve the site access requested by Chrome, and refresh existing pages before editing. Keep the panel closed, edit a field, then open it or click Save to review the captured change.

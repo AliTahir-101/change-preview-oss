@@ -7,12 +7,58 @@
 (function() {
   'use strict';
 
+  // Programmatic inject (activeTab + scripting, allFrames) can run this file
+  // more than once if two ensure() calls race. Skip a second init so we don't
+  // double-register listeners / baselines. Tests eval once per jsdom window.
+  if (globalThis.__CHANGEPREVIEW_LOADED__) return;
+  globalThis.__CHANGEPREVIEW_LOADED__ = true;
+
+  let contextInvalidated = false;
+  let trackingObserver = null;
+  const trackingIntervals = [];
+
+  function retireContext() {
+    contextInvalidated = true;
+    trackingObserver?.disconnect();
+    trackingIntervals.forEach(clearInterval);
+    document.getElementById('changepreview-overlay-host')?.remove();
+  }
+
+  function contextAvailable() {
+    if (contextInvalidated) return false;
+    try {
+      if (!chrome.runtime || ('id' in chrome.runtime && !chrome.runtime.id)) {
+        retireContext();
+        return false;
+      }
+      return true;
+    } catch {
+      retireContext();
+      return false;
+    }
+  }
+
+  function sendRuntimeMessage(message) {
+    if (!contextAvailable()) return;
+    const failed = (error) => {
+      if (/extension context invalidated/i.test(String(error?.message || error))) retireContext();
+    };
+    try {
+      // Chrome can throw synchronously after an extension reload, before a
+      // Promise exists. Ordinary closed-panel failures remain harmless.
+      chrome.runtime.sendMessage(message)?.catch(failed);
+    } catch (error) {
+      failed(error);
+    }
+  }
+
+
   /**
    * Is this content script running in the TOP-LEVEL browsing context (the tab's
    * real page) rather than a sub-frame / iframe?
    *
-   * The extension injects into all frames (`all_frames: true`) so it can reach
-   * forms rendered inside iframes (SPA dashboards, portals, embedded widgets).
+   * Chrome loads the content script automatically in matching frames at page
+   * load. The toolbar can also inject a fallback on an already-open page.
    * We separate two concerns that an earlier version wrongly collapsed into one:
    *
    *   - WHERE WE COLLECT FIELDS: every frame collects its own fields, so forms
@@ -1347,6 +1393,7 @@
    * The suppressFor() call blocks notifications during the transition window.
    */
   function snapshotBaseline(silent = false) {
+    if (!contextAvailable()) return;
     baseline.clear();
     const fields = collectFields();
     for (const field of fields) {
@@ -1510,6 +1557,7 @@
    * the frame UID so they never collide with other frames or the top document.
    */
   function postReportToTop(kind, trigger) {
+    if (!contextAvailable()) return;
     if (IS_TOP_FRAME) return;
     try {
       const payload = { [CP_FRAME_TAG]: true, kind, uid: FRAME_UID };
@@ -1525,18 +1573,20 @@
   }
 
   function updateBadge() {
+    if (!contextAvailable()) return;
     if (!IS_TOP_FRAME) {
       postReportToTop('FIELDS');
       return;
     }
     const count = getAggregatedReport().dirty.length;
-    chrome.runtime.sendMessage({
+    sendRuntimeMessage({
       type: 'UPDATE_BADGE',
       count: count
-    }).catch(() => {});
+    });
   }
 
   function notifyPanel(trigger) {
+    if (!contextAvailable()) return;
     // After Clear/Reapply, suppress notifications to prevent phantom dirty rows.
     if (isSuppressed()) return;
 
@@ -1550,7 +1600,7 @@
     }
 
     const agg = getAggregatedReport();
-    chrome.runtime.sendMessage({
+    sendRuntimeMessage({
       type: 'FIELDS_UPDATE',
       data: {
         host: location.hostname,
@@ -1569,7 +1619,7 @@
         // post-reload hydration/empty baseline cannot flash-then-clear Keep rows.
         trigger: kind
       }
-    }).catch(() => {});
+    });
   }
 
   /** Debounced top-frame push used when sub-frame reports arrive/expire. */
@@ -1784,6 +1834,7 @@
    * leaves the browser), so the lightweight tag check is sufficient.
    */
   function handleFrameMessage(event) {
+    if (!contextAvailable()) return;
     const d = event && event.data;
     if (!d || d[CP_FRAME_TAG] !== true) return;
     if (event.source === window.self) return;
@@ -2062,7 +2113,7 @@
 
     reviewBtn.addEventListener('click', () => {
       close();
-      chrome.runtime.sendMessage({ type: 'OPEN_PANEL' }).catch(() => {});
+      sendRuntimeMessage({ type: 'OPEN_PANEL' });
       onCancel();
     });
 
@@ -2238,6 +2289,7 @@
   }
 
   function handleSaveClick(e) {
+    if (!contextAvailable()) return;
     if (!saveInterceptEnabled) return;
     if (modalOpen) return;
 
@@ -2323,6 +2375,7 @@
      * The user's edit will then be detected as a diff vs the Clear-time baseline.
      */
     function handleUserInput(e) {
+      if (!contextAvailable()) return;
       // Only reset clearedSession on real user input, not programmatic changes
       if (clearedSession && !applyingChanges && e.isTrusted) {
         clearedSession = false;
@@ -2343,6 +2396,7 @@
     document.addEventListener('click', handleSaveClick, true);
     
     document.addEventListener('submit', (e) => {
+      if (!contextAvailable()) return;
       if (!saveInterceptEnabled) return;
       if (modalOpen) return;
 
@@ -2409,8 +2463,10 @@
     let debounceTimer = null;
     
     const observer = new MutationObserver(() => {
+      if (!contextAvailable()) return;
       clearTimeout(debounceTimer);
       debounceTimer = setTimeout(() => {
+        if (!contextAvailable()) return;
         const currentFieldCount = collectFields().length;
         // Large structural change (e.g. a whole form mounted) → re-baseline.
         if (Math.abs(currentFieldCount - baseline.size) > baseline.size * 0.5) {
@@ -2427,6 +2483,7 @@
       }, 400);
     });
     
+    trackingObserver = observer;
     observer.observe(document.documentElement || document.body, {
       childList: true,
       subtree: true
@@ -2952,6 +3009,10 @@
     if (!IS_TOP_FRAME) return false;
 
     switch (message.type) {
+      case 'PING':
+        sendResponse({ ok: true });
+        break;
+
       case 'GET_FIELDS': {
         const agg = getAggregatedReport();
         sendResponse({
@@ -3081,16 +3142,17 @@
     if (IS_TOP_FRAME) {
       // Expire sub-frame detections whose frame has gone away (iframe/modal
       // removed) so their rows clear even if the frame never fired `pagehide`.
-      setInterval(() => {
+      trackingIntervals.push(setInterval(() => {
+        if (!contextAvailable()) return;
         if (pruneStaleSubFrames()) {
           updateBadge();
           notifyPanel();
         }
-      }, FRAME_HEARTBEAT_MS);
+      }, FRAME_HEARTBEAT_MS));
     } else {
       // Heartbeat keeps this sub-frame's detections alive in the top frame; a
       // final GONE on teardown clears them immediately when the frame is removed.
-      setInterval(() => { postReportToTop('FIELDS'); }, FRAME_HEARTBEAT_MS);
+      trackingIntervals.push(setInterval(() => { postReportToTop('FIELDS'); }, FRAME_HEARTBEAT_MS));
       const sayGone = () => postReportToTop('GONE');
       window.addEventListener('pagehide', sayGone, true);
       window.addEventListener('unload', sayGone, true);
