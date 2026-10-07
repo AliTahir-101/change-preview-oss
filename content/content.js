@@ -7,6 +7,33 @@
 (function() {
   'use strict';
 
+  /**
+   * Is this content script running in the TOP-LEVEL browsing context (the tab's
+   * real page) rather than a sub-frame / iframe?
+   *
+   * The extension injects into all frames (`all_frames: true`) so it can reach
+   * forms rendered inside same-origin iframes. But only the top frame represents
+   * the page the user is actually on. Sub-frames — especially ephemeral CDN /
+   * widget iframes (e.g. b.stripecdn.com, js.stripe.com on dashboard.stripe.com)
+   * — must never drive the tracked identity (host/path shown in the panel, the
+   * storage key, or the badge), otherwise the displayed URL "flits" to whatever
+   * sub-frame last navigated even though the user is still on the real page.
+   *
+   * We therefore let the panel-facing role (field reporting, GET_FIELDS/command
+   * handling, badge updates, and the save-confirm intercept) run only in the top
+   * frame. Comparing window references never throws cross-origin, so this is
+   * safe and generic — no per-site hardcodes.
+   */
+  const IS_TOP_FRAME = (() => {
+    try {
+      return window.top === window.self;
+    } catch {
+      // A thrown SecurityError only happens for cross-origin access, which by
+      // definition means we are NOT the top frame.
+      return false;
+    }
+  })();
+
   const SKIP_TYPES = new Set(['password', 'hidden', 'file']);
   const SENSITIVE_PATTERN = /password|secret|token|ssn|cvv|cvc|otp|api[-_]?key|auth/i;
   const SENSITIVE_AUTOCOMPLETE = new Set([
@@ -166,6 +193,41 @@
   let saveInterceptEnabled = true;
   let modalOpen = false;
   let pendingSaveTarget = null;
+
+  /**
+   * User preference: show the save/submit confirmation dialog that lists pending
+   * changes before the form is submitted. Defaults to true so new installs keep
+   * the current "confirm on save" behaviour. When false, the dialog is never
+   * shown and submits/saves proceed normally — but change detection and the side
+   * panel keep working for information only.
+   *
+   * Persisted in chrome.storage.local under `confirmOnSaveEnabled` and kept in
+   * sync across all tabs/frames via a storage change listener.
+   */
+  let confirmOnSaveEnabled = true;
+
+  const CONFIRM_ON_SAVE_KEY = 'confirmOnSaveEnabled';
+
+  function loadConfirmOnSavePref() {
+    try {
+      chrome.storage?.local?.get(CONFIRM_ON_SAVE_KEY, (res) => {
+        if (chrome.runtime?.lastError) return;
+        // Default ON: only an explicit stored `false` disables the dialog.
+        confirmOnSaveEnabled = res?.[CONFIRM_ON_SAVE_KEY] !== false;
+      });
+    } catch {}
+  }
+
+  function setupPrefSync() {
+    try {
+      chrome.storage?.onChanged?.addListener((changes, area) => {
+        if (area !== 'local') return;
+        if (changes[CONFIRM_ON_SAVE_KEY]) {
+          confirmOnSaveEnabled = changes[CONFIRM_ON_SAVE_KEY].newValue !== false;
+        }
+      });
+    } catch {}
+  }
   
   /**
    * Timestamp when notifications were last suppressed.
@@ -1323,6 +1385,9 @@
   }
 
   function updateBadge() {
+    // Only the top frame owns the tab's badge; sub-frames must not clobber it.
+    if (!IS_TOP_FRAME) return;
+
     const dirty = getDirtyFields();
     const count = dirty.length;
     
@@ -1333,6 +1398,11 @@
   }
 
   function notifyPanel() {
+    // Only the top frame reports the page identity to the panel. Sub-frames
+    // (CDN/widget iframes) would otherwise push their own host and make the
+    // tracked URL flit away from the real top-level page.
+    if (!IS_TOP_FRAME) return;
+
     // After Clear/Reapply, suppress notifications to prevent phantom dirty rows
     if (isSuppressed()) return;
     
@@ -1372,151 +1442,255 @@
     return false;
   }
 
-  function showConfirmModal(dirtyFields, onConfirm, onCancel) {
-    if (modalOpen) return;
-    modalOpen = true;
-    
-    const overlay = document.createElement('div');
-    overlay.id = 'changepreview-overlay';
-    overlay.style.cssText = `
+  /**
+   * Scoped stylesheet for the confirm dialog. Rendered inside a Shadow DOM so
+   * host-page CSS cannot leak in and break the layout or wash out the buttons.
+   *
+   * Every button sets its own background, text color, border, padding and font
+   * explicitly (and resets `appearance`) so the Cancel button in particular is
+   * always clearly visible and tappable regardless of the host page's styles,
+   * in both light and dark environments.
+   */
+  const CONFIRM_MODAL_CSS = `
+    :host { all: initial; }
+    *, *::before, *::after { box-sizing: border-box; }
+    .cp-overlay {
       position: fixed;
-      top: 0; left: 0; right: 0; bottom: 0;
-      background: rgba(0,0,0,0.5);
-      z-index: 2147483646;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.5);
+      z-index: 2147483647;
       display: flex;
       align-items: center;
       justify-content: center;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    `;
-    
-    const modal = document.createElement('div');
-    modal.style.cssText = `
-      background: white;
-      border-radius: 8px;
+      padding: 16px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+    .cp-modal {
+      background: #ffffff;
+      color: #1f2328;
+      border: 1px solid rgba(0, 0, 0, 0.1);
+      border-radius: 10px;
       padding: 20px;
       max-width: 420px;
-      width: 90%;
+      width: 100%;
       max-height: 80vh;
       overflow-y: auto;
-      box-shadow: 0 4px 20px rgba(0,0,0,0.3);
-    `;
-    
+      box-shadow: 0 8px 30px rgba(0, 0, 0, 0.35);
+    }
+    .cp-title {
+      margin: 0 0 14px 0;
+      font-size: 16px;
+      font-weight: 600;
+      line-height: 1.3;
+      color: #1f2328;
+    }
+    .cp-list {
+      margin: 0 0 16px 0;
+      padding-left: 20px;
+      font-size: 13px;
+      line-height: 1.5;
+      color: #444c56;
+    }
+    .cp-list li { margin-bottom: 4px; }
+    .cp-list strong { font-weight: 600; }
+    .cp-was { color: #b42318; text-decoration: line-through; }
+    .cp-now { color: #067647; }
+    .cp-more { color: #7d8590; font-style: italic; }
+    .cp-actions {
+      display: flex;
+      gap: 10px;
+      justify-content: flex-end;
+      flex-wrap: wrap;
+    }
+    .cp-btn {
+      appearance: none;
+      -webkit-appearance: none;
+      margin: 0;
+      min-width: 84px;
+      padding: 9px 16px;
+      font-family: inherit;
+      font-size: 14px;
+      font-weight: 500;
+      line-height: 1.2;
+      text-align: center;
+      border: 1px solid transparent;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    .cp-btn:focus-visible {
+      outline: 2px solid #0969da;
+      outline-offset: 2px;
+    }
+    .cp-btn-cancel {
+      background: #f3f4f6;
+      color: #1f2328;
+      border-color: #d0d7de;
+    }
+    .cp-btn-cancel:hover { background: #e9ebef; }
+    .cp-btn-review {
+      background: #ffffff;
+      color: #0969da;
+      border-color: #0969da;
+    }
+    .cp-btn-review:hover { background: #f3f8ff; }
+    .cp-btn-save {
+      background: #0969da;
+      color: #ffffff;
+      border-color: #0969da;
+    }
+    .cp-btn-save:hover { background: #0860c4; }
+    @media (prefers-color-scheme: dark) {
+      .cp-modal {
+        background: #1b1f24;
+        color: #e6edf3;
+        border-color: rgba(255, 255, 255, 0.12);
+      }
+      .cp-title { color: #e6edf3; }
+      .cp-list { color: #adbac7; }
+      .cp-was { color: #ff7b72; }
+      .cp-now { color: #3fb950; }
+      .cp-more { color: #768390; }
+      .cp-btn-cancel {
+        background: #2d333b;
+        color: #e6edf3;
+        border-color: #545d68;
+      }
+      .cp-btn-cancel:hover { background: #363c44; }
+      .cp-btn-review {
+        background: #1b1f24;
+        color: #58a6ff;
+        border-color: #58a6ff;
+      }
+      .cp-btn-review:hover { background: #22272e; }
+      .cp-btn-save {
+        background: #2f81f7;
+        color: #ffffff;
+        border-color: #2f81f7;
+      }
+      .cp-btn-save:hover { background: #4493f8; }
+    }
+  `;
+
+  function showConfirmModal(dirtyFields, onConfirm, onCancel) {
+    if (modalOpen) return;
+    modalOpen = true;
+
+    // Host element + Shadow DOM isolate the dialog from host-page CSS. `all:
+    // initial` on the host blocks inherited properties (color/font) from leaking
+    // in, so the Cancel button can never end up washed out or mis-sized.
+    const host = document.createElement('div');
+    host.id = 'changepreview-overlay-host';
+    host.style.setProperty('all', 'initial', 'important');
+    const shadow = host.attachShadow({ mode: 'open' });
+
+    const style = document.createElement('style');
+    style.textContent = CONFIRM_MODAL_CSS;
+    shadow.appendChild(style);
+
+    const overlay = document.createElement('div');
+    overlay.className = 'cp-overlay';
+
+    const modal = document.createElement('div');
+    modal.className = 'cp-modal';
+    modal.setAttribute('role', 'dialog');
+    modal.setAttribute('aria-modal', 'true');
+
     const header = document.createElement('h3');
+    header.className = 'cp-title';
     header.textContent = `You're about to save ${dirtyFields.length} change${dirtyFields.length === 1 ? '' : 's'}`;
-    header.style.cssText = 'margin: 0 0 16px 0; font-size: 16px; color: #333;';
     modal.appendChild(header);
-    
+
     if (dirtyFields.length > 0) {
       const list = document.createElement('ul');
-      list.style.cssText = 'margin: 0 0 16px 0; padding-left: 20px; color: #555; font-size: 13px;';
-      
+      list.className = 'cp-list';
+
       const maxShow = 5;
       const toShow = dirtyFields.slice(0, maxShow);
-      
+
       for (const field of toShow) {
         const li = document.createElement('li');
-        li.style.cssText = 'margin-bottom: 4px;';
-        li.innerHTML = `<strong>${escapeHtml(field.label)}</strong>: 
-          <span style="color: #c00; text-decoration: line-through;">${escapeHtml(truncate(field.was, 20))}</span> → 
-          <span style="color: #080;">${escapeHtml(truncate(field.now, 20))}</span>`;
+        li.innerHTML = `<strong>${escapeHtml(field.label)}</strong>: ` +
+          `<span class="cp-was">${escapeHtml(truncate(field.was, 20))}</span> \u2192 ` +
+          `<span class="cp-now">${escapeHtml(truncate(field.now, 20))}</span>`;
         list.appendChild(li);
       }
-      
+
       if (dirtyFields.length > maxShow) {
         const li = document.createElement('li');
-        li.style.cssText = 'color: #888; font-style: italic;';
+        li.className = 'cp-more';
         li.textContent = `...and ${dirtyFields.length - maxShow} more`;
         list.appendChild(li);
       }
-      
+
       modal.appendChild(list);
     }
-    
+
     const buttons = document.createElement('div');
-    buttons.style.cssText = 'display: flex; gap: 10px; justify-content: flex-end;';
-    
+    buttons.className = 'cp-actions';
+
     const cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.className = 'cp-btn cp-btn-cancel';
     cancelBtn.textContent = 'Cancel';
-    cancelBtn.style.cssText = `
-      padding: 8px 16px;
-      border: 1px solid #ccc;
-      background: white;
-      border-radius: 4px;
-      cursor: pointer;
-      font-size: 14px;
-    `;
-    
+
     const reviewBtn = document.createElement('button');
+    reviewBtn.type = 'button';
+    reviewBtn.className = 'cp-btn cp-btn-review';
     reviewBtn.textContent = 'Review in panel';
-    reviewBtn.style.cssText = `
-      padding: 8px 16px;
-      border: 1px solid #0066cc;
-      background: white;
-      color: #0066cc;
-      border-radius: 4px;
-      cursor: pointer;
-      font-size: 14px;
-    `;
-    
+
     const saveBtn = document.createElement('button');
+    saveBtn.type = 'button';
+    saveBtn.className = 'cp-btn cp-btn-save';
     saveBtn.textContent = 'Save anyway';
-    saveBtn.style.cssText = `
-      padding: 8px 16px;
-      border: none;
-      background: #0066cc;
-      color: white;
-      border-radius: 4px;
-      cursor: pointer;
-      font-size: 14px;
-    `;
-    
+
     buttons.appendChild(cancelBtn);
     buttons.appendChild(reviewBtn);
     buttons.appendChild(saveBtn);
     modal.appendChild(buttons);
     overlay.appendChild(modal);
-    document.body.appendChild(overlay);
-    
+    shadow.appendChild(overlay);
+    document.body.appendChild(host);
+
     function close() {
       modalOpen = false;
-      overlay.remove();
+      host.remove();
+      document.removeEventListener('keydown', onKeydown, true);
     }
-    
+
     cancelBtn.addEventListener('click', () => {
       close();
       onCancel();
     });
-    
+
     reviewBtn.addEventListener('click', () => {
       close();
       chrome.runtime.sendMessage({ type: 'OPEN_PANEL' }).catch(() => {});
       onCancel();
     });
-    
+
     saveBtn.addEventListener('click', () => {
       close();
       onConfirm();
     });
-    
+
     overlay.addEventListener('click', (e) => {
       if (e.target === overlay) {
         close();
         onCancel();
       }
     });
-    
-    document.addEventListener('keydown', function handler(e) {
+
+    function onKeydown(e) {
       if (e.key === 'Escape') {
         close();
         onCancel();
-        document.removeEventListener('keydown', handler);
       } else if (e.key === 'Enter') {
         close();
         onConfirm();
-        document.removeEventListener('keydown', handler);
       }
-    });
-    
+    }
+    document.addEventListener('keydown', onKeydown, true);
+
     saveBtn.focus();
   }
 
@@ -1668,6 +1842,11 @@
   function handleSaveClick(e) {
     if (!saveInterceptEnabled) return;
     if (modalOpen) return;
+
+    // User turned off the confirm-on-save dialog: let the save proceed normally.
+    // Detection still runs (via input/change listeners) so the panel keeps
+    // showing changes for information only.
+    if (!confirmOnSaveEnabled) return;
     
     // Never intercept on denylisted hosts (payment/admin dashboards)
     if (isInterceptDenylisted()) return;
@@ -1762,6 +1941,10 @@
     document.addEventListener('submit', (e) => {
       if (!saveInterceptEnabled) return;
       if (modalOpen) return;
+
+      // User turned off the confirm-on-save dialog: let the submit proceed
+      // normally. Detection keeps running so the panel still lists changes.
+      if (!confirmOnSaveEnabled) return;
       
       // Never intercept on denylisted hosts (payment/admin dashboards)
       if (isInterceptDenylisted()) return;
@@ -2330,6 +2513,13 @@
   }
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    // Only the top frame answers panel requests. If sub-frames also responded to
+    // GET_FIELDS, whichever frame won the race would define the tracked identity,
+    // making the displayed host flit between CDN/widget iframes. Returning false
+    // (not keeping the channel open) lets the top frame's response be the one the
+    // panel receives.
+    if (!IS_TOP_FRAME) return false;
+
     switch (message.type) {
       case 'GET_FIELDS':
         const dirty = getDirtyFields();
@@ -2400,6 +2590,12 @@
   });
 
   function init() {
+    // Sub-frames stay inert: they must not snapshot, report, intercept saves, or
+    // own the badge/identity. Only the top-level page the user is on drives the
+    // extension. This keeps the tracked URL on the real host instead of hopping
+    // to CDN/widget iframes.
+    if (!IS_TOP_FRAME) return;
+
     if (document.readyState === 'loading') {
       document.addEventListener('DOMContentLoaded', () => {
         setTimeout(snapshotBaseline, 300);
@@ -2411,6 +2607,9 @@
     setupInputListeners();
     setupSaveIntercept();
     setupMutationObserver();
+
+    loadConfirmOnSavePref();
+    setupPrefSync();
   }
 
   /**

@@ -10,6 +10,7 @@ ChangePreview is a Chrome extension that snapshots form fields when you load a p
 
 - **Side panel UI** — Shows only dirty fields with old vs new values
 - **Soft Save confirm** — Modal appears when you click Save/Submit/Update with pending changes
+- **Confirm on save toggle** — A header checkbox turns the save/submit confirmation dialog off; change detection and the side panel keep working for information only
 - **Copy Markdown / CSV** — One-click export for change documentation
 - **Coverage meter** — Honest about what fields are being tracked
 - **Privacy-first** — All data stays local; passwords and sensitive fields are skipped
@@ -138,7 +139,7 @@ The extension uses a sophisticated label resolution algorithm to find the human-
 ## Known Limitations
 
 - **Shadow DOM** — Fields inside closed Shadow DOM roots (e.g., some Salesforce Lightning components) cannot be accessed. The coverage meter shows partial coverage when this occurs.
-- **Cross-origin iframes** — Fields in iframes from different domains may not be tracked
+- **Iframes** — Only the top-level page the user is on drives the tracked URL, badge, and save-confirm. Forms rendered inside iframes (including CDN/widget iframes such as those on SPA dashboards) are not tracked, so the tracked identity always stays on the real page host instead of hopping to a sub-frame/CDN URL.
 - **Custom widgets** — Non-standard form widgets (custom React/Vue components that don't use native inputs) may not be detected
 - **Async loading** — If form values are populated after page load, the baseline may be incomplete. Use the "Re-snapshot" button to capture the current state.
 - **Form builder variations** — While tested with Microsoft Forms and Google Forms patterns, some form builders may use unique DOM structures that aren't recognized.
