@@ -59,6 +59,72 @@ const STORAGE_PREFIX = 'cp_detections:';
 const CLEARED_PREFIX = 'cp_cleared:';
 const CONFIRM_ON_SAVE_KEY = 'confirmOnSaveEnabled';
 
+/**
+ * Query params that are tracking/analytics junk. They are stripped from the
+ * canonical page key so the same form isn't split across campaign/share links.
+ * Matched case-insensitively, plus any param whose name starts with "utm_".
+ */
+const TRACKING_PARAMS = new Set([
+  'gclid', 'gclsrc', 'dclid', 'gbraid', 'wbraid', 'gad_source',
+  'fbclid', 'msclkid', 'yclid', 'twclid', 'ttclid', 'igshid', 'scid',
+  'mc_cid', 'mc_eid', 'oly_anon_id', 'oly_enc_id', 'vero_id', 'vero_conv',
+  '_hsenc', '_hsmi', 'mkt_tok', 'ref_src', 'ref_url', 'wickedid',
+]);
+
+function isTrackingParam(name) {
+  const n = (name || '').toLowerCase();
+  return n.startsWith('utm_') || TRACKING_PARAMS.has(n);
+}
+
+/**
+ * Canonical identity for a form page: origin + pathname + meaningful query.
+ *
+ * - Drops the hash (#…) entirely.
+ * - Removes tracking params (utm_*, gclid, fbclid, …) but keeps real query
+ *   params (e.g. ?formId=123) so different forms on the same path stay separate.
+ * - Sorts the remaining params so param order never splits one form.
+ * - Normalizes a trailing slash on the pathname.
+ *
+ * Returns null for unparseable input. This is a storage/identity key, not a
+ * URL meant to be navigated to.
+ */
+function canonicalizePageUrl(rawUrl) {
+  let u;
+  try {
+    u = new URL(rawUrl);
+  } catch {
+    return null;
+  }
+  const params = new URLSearchParams(u.search);
+  for (const key of [...params.keys()]) {
+    if (isTrackingParam(key)) params.delete(key);
+  }
+  params.sort();
+  const query = params.toString();
+  const search = query ? `?${query}` : '';
+  const pathname = (u.pathname || '/').replace(/\/+$/, '') || '/';
+  return `${u.origin}${pathname}${search}`;
+}
+
+/**
+ * Resolve the canonical page key for a content-script payload or a tab URL.
+ *
+ * Prefers the full top-level `url` (reported by the top frame only, so CDN/
+ * sub-frame URLs never become the identity). Falls back to a host+path pseudo
+ * URL when only host/path are available (e.g. an older content script, or the
+ * no-content-script tab.url path). Returns null when nothing usable is present.
+ */
+function getPageKey(source) {
+  if (source && typeof source.url === 'string' && source.url) {
+    const canon = canonicalizePageUrl(source.url);
+    if (canon) return canon;
+  }
+  const host = source?.host;
+  if (!host) return null;
+  const path = (source?.path || '/').replace(/\/+$/, '') || '/';
+  return `https://${host}${path}`;
+}
+
 let currentData = null;
 let persistEnabled = false;
 
@@ -140,11 +206,10 @@ function setClearedFor(ms) {
 }
 
 /**
- * Get the cleared marker key for a host/path.
+ * Get the cleared marker key for a canonical page key.
  */
-function getClearedMarkerKey(host, path) {
-  const normalizedPath = (path || '/').replace(/\/+$/, '') || '/';
-  return CLEARED_PREFIX + host + normalizedPath;
+function getClearedMarkerKey(pageKey) {
+  return CLEARED_PREFIX + (pageKey || '');
 }
 
 /**
@@ -156,10 +221,10 @@ function getClearedMarkerKey(host, path) {
  * If there's newer saved data, the marker is stale (user made new edits)
  * and we should restore normally.
  */
-async function hasPageClearedMarker(host, path) {
-  if (!host) return false;
+async function hasPageClearedMarker(pageKey) {
+  if (!pageKey) return false;
   try {
-    const markerKey = getClearedMarkerKey(host, path);
+    const markerKey = getClearedMarkerKey(pageKey);
     const all = await chrome.storage.local.get(null);
     const marker = all[markerKey];
     
@@ -169,16 +234,12 @@ async function hasPageClearedMarker(host, path) {
     
     // Check if there's any saved detection data AFTER clearedAt
     const clearedAt = marker.clearedAt || 0;
-    const normalizedPath = (path || '/').replace(/\/+$/, '') || '/';
     
     for (const [key, value] of Object.entries(all)) {
       if (!key.startsWith(STORAGE_PREFIX)) continue;
       
-      // Check if this is data for the same page
-      const valueHost = value?.host || '';
-      const valuePath = (value?.path || '/').replace(/\/+$/, '') || '/';
-      
-      if (valueHost === host && valuePath === normalizedPath) {
+      // Check if this is data for the same page (by canonical page key)
+      if ((value?.pageKey || '') === pageKey) {
         // Found saved data for this page - check timestamp
         const savedAt = value?.savedAt || 0;
         if (savedAt > clearedAt) {
@@ -199,10 +260,10 @@ async function hasPageClearedMarker(host, path) {
 /**
  * Set the cleared marker for a page.
  */
-async function setPageClearedMarker(host, path) {
-  if (!host) return;
+async function setPageClearedMarker(pageKey) {
+  if (!pageKey) return;
   try {
-    const key = getClearedMarkerKey(host, path);
+    const key = getClearedMarkerKey(pageKey);
     await chrome.storage.local.set({ 
       [key]: { clearedAt: Date.now(), untilEdit: true } 
     });
@@ -215,10 +276,10 @@ async function setPageClearedMarker(host, path) {
 /**
  * Remove the cleared marker for a page (on first real edit).
  */
-async function removePageClearedMarker(host, path) {
-  if (!host) return;
+async function removePageClearedMarker(pageKey) {
+  if (!pageKey) return;
   try {
-    const key = getClearedMarkerKey(host, path);
+    const key = getClearedMarkerKey(pageKey);
     await chrome.storage.local.remove(key);
     clearedPageKey = null;
     panelClearedSession = false;
@@ -530,12 +591,13 @@ async function refreshData() {
     if (response) {
       const fieldKeys = (response.dirty || []).map(f => f.key);
       const allFieldKeys = response.allFieldKeys || fieldKeys;
-      const newFingerprint = createFingerprint(response.host, response.path, allFieldKeys);
+      const pageKey = getPageKey(response);
+      const newFingerprint = createFingerprint(pageKey, allFieldKeys);
       
       const liveHasChanges = response.dirty?.length > 0;
       
       // Check for persistent cleared marker - NEVER restore if page was cleared
-      const pageCleared = await hasPageClearedMarker(response.host, response.path);
+      const pageCleared = await hasPageClearedMarker(pageKey);
       
       if (persistEnabled && liveHasChanges) {
         // Real live changes detected - this is a new edit session
@@ -544,7 +606,7 @@ async function refreshData() {
         
         if (pageCleared || panelClearedSession) {
           // First real edit after Clear - remove the marker, allow saving
-          await removePageClearedMarker(response.host, response.path);
+          await removePageClearedMarker(pageKey);
         }
         currentFingerprint = newFingerprint;
         await saveDetections(response, currentFingerprint);
@@ -559,7 +621,7 @@ async function refreshData() {
       if (persistEnabled && !liveHasChanges && justReloaded && !isCleared() && !pageCleared && !panelClearedSession) {
         let persisted = await loadPersistedDetections(newFingerprint);
         if (!persisted) {
-          const fallback = await loadPersistedByHostPath(response.host, response.path);
+          const fallback = await loadPersistedByPageKey(pageKey);
           if (fallback?.data) {
             persisted = fallback.data;
           }
@@ -616,12 +678,13 @@ async function refreshData() {
     if (tab?.url && persistEnabled) {
       try {
         const url = new URL(tab.url);
+        const pageKey = getPageKey({ url: tab.url });
         
         // Check for cleared marker before loading
-        const pageCleared = await hasPageClearedMarker(url.host, url.pathname);
+        const pageCleared = await hasPageClearedMarker(pageKey);
         if (pageCleared) return;
         
-        const fallback = await loadPersistedByHostPath(url.host, url.pathname);
+        const fallback = await loadPersistedByPageKey(pageKey);
         if (fallback?.data?.dirty?.length > 0) {
           persistedData = fallback.data;
           currentFingerprint = fallback.data.fingerprint;
@@ -666,11 +729,10 @@ function hideConfirmDialog() {
  * Uses origin + normalized pathname + field signature hash.
  * Field signature = sorted list of field keys, hashed for compactness.
  */
-function createFingerprint(host, path, fieldKeys) {
-  const normalizedPath = (path || '/').replace(/\/+$/, '') || '/';
+function createFingerprint(pageKey, fieldKeys) {
   const keySignature = (fieldKeys || []).slice().sort().join('|');
   const hash = simpleHash(keySignature);
-  return `${host}${normalizedPath}#${hash}`;
+  return `${pageKey || ''}#${hash}`;
 }
 
 function simpleHash(str) {
@@ -699,21 +761,22 @@ async function loadPersistedDetections(fingerprint) {
   }
 }
 
-async function loadPersistedByHostPath(host, path) {
-  if (!host) return null;
+async function loadPersistedByPageKey(pageKey) {
+  if (!pageKey) return null;
   try {
-    const normalizedPath = (path || '/').replace(/\/+$/, '') || '/';
-    const prefix = STORAGE_PREFIX + host + normalizedPath;
+    const prefix = STORAGE_PREFIX + pageKey + '#';
     const all = await chrome.storage.local.get(null);
     
     for (const [key, value] of Object.entries(all)) {
-      if (key.startsWith(prefix)) {
+      // Match by the stored canonical page key (authoritative) or the storage
+      // key prefix (fingerprint is `<pageKey>#<hash>`).
+      if ((value?.pageKey || '') === pageKey || key.startsWith(prefix)) {
         return { key, data: value };
       }
     }
     return null;
   } catch (err) {
-    console.error('Failed to load persisted by host/path:', err);
+    console.error('Failed to load persisted by page key:', err);
     return null;
   }
 }
@@ -724,6 +787,9 @@ async function saveDetections(data, fingerprint) {
     const key = getStorageKey(fingerprint);
     const toStore = {
       fingerprint: fingerprint,
+      // Canonical identity for this form page (origin + path + meaningful query).
+      pageKey: getPageKey(data),
+      // host/path retained for the header display of restored data.
       host: data.host,
       path: data.path,
       dirty: data.dirty.map(f => ({
@@ -746,14 +812,13 @@ async function saveDetections(data, fingerprint) {
  * Aggressively clear ALL detection storage keys for a page.
  * Uses multiple matching strategies to ensure no leftovers:
  * 1. Current fingerprint key
- * 2. Keys with matching prefix (host + normalized path)
- * 3. Keys where stored value.host/value.path match this page
+ * 2. Keys with the canonical page-key prefix (`<pageKey>#…`)
+ * 3. Keys where the stored value.pageKey matches this page
  * 4. Set persistent cleared marker
  */
-async function clearPersistedDetections(host, path) {
+async function clearPersistedDetections(pageKey) {
   try {
     const keysToRemove = [];
-    const normalizedPath = (path || '/').replace(/\/+$/, '') || '/';
     
     // Strategy 1: Current fingerprint
     if (currentFingerprint) {
@@ -763,30 +828,19 @@ async function clearPersistedDetections(host, path) {
     // Get all storage
     const all = await chrome.storage.local.get(null);
     
-    if (host) {
-      // Strategy 2: Key prefix matching (host + path variations)
-      const prefixes = [
-        STORAGE_PREFIX + host + normalizedPath,
-        STORAGE_PREFIX + host + path,  // Original path
-        STORAGE_PREFIX + host + normalizedPath.toLowerCase(),
-      ];
+    if (pageKey) {
+      // Strategy 2: Key prefix matching (fingerprint is `<pageKey>#<hash>`).
+      const prefix = STORAGE_PREFIX + pageKey + '#';
       
       for (const [key, value] of Object.entries(all)) {
         if (!key.startsWith(STORAGE_PREFIX)) continue;
         if (keysToRemove.includes(key)) continue;
         
-        // Check prefix match
-        const matchesPrefix = prefixes.some(p => key.startsWith(p));
+        // Prefix match on the canonical page key, or exact stored page key match.
+        const matchesPrefix = key.startsWith(prefix);
+        const matchesValue = (value?.pageKey || '') === pageKey;
         
-        // Strategy 3: Value match (stored host/path)
-        const valueHost = value?.host || '';
-        const valuePath = (value?.path || '/').replace(/\/+$/, '') || '/';
-        const matchesValue = valueHost === host && valuePath === normalizedPath;
-        
-        // Strategy 4: Host-only match with path similarity
-        const matchesHost = valueHost === host && key.includes(normalizedPath);
-        
-        if (matchesPrefix || matchesValue || matchesHost) {
+        if (matchesPrefix || matchesValue) {
           keysToRemove.push(key);
         }
       }
@@ -798,7 +852,7 @@ async function clearPersistedDetections(host, path) {
     }
     
     // Set persistent cleared marker for this page
-    await setPageClearedMarker(host, normalizedPath);
+    await setPageClearedMarker(pageKey);
     
     // Clear memory
     persistedData = null;
@@ -862,9 +916,10 @@ async function savePersistSetting(enabled) {
           if (response?.dirty?.length > 0) {
             const fieldKeys = (response.dirty || []).map(f => f.key);
             const allFieldKeys = response.allFieldKeys || fieldKeys;
-            currentFingerprint = createFingerprint(response.host, response.path, allFieldKeys);
+            const pageKey = getPageKey(response);
+            currentFingerprint = createFingerprint(pageKey, allFieldKeys);
             // We're saving fresh data, so any old cleared marker for this page is stale
-            await removePageClearedMarker(response.host, response.path);
+            await removePageClearedMarker(pageKey);
             await saveDetections(response, currentFingerprint);
             persistedData = { dirty: response.dirty, fingerprint: currentFingerprint };
           }
@@ -874,16 +929,8 @@ async function savePersistSetting(enabled) {
       }
     } else {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      let host = null;
-      let path = null;
-      if (tab?.url) {
-        try {
-          const url = new URL(tab.url);
-          host = url.host;
-          path = url.pathname;
-        } catch {}
-      }
-      await clearPersistedDetections(host, path);
+      const pageKey = tab?.url ? getPageKey({ url: tab.url }) : null;
+      await clearPersistedDetections(pageKey);
       isShowingRestoredData = false;
       formLooksReset = false;
       updateReapplyVisibility();
@@ -932,12 +979,13 @@ async function clearDetections() {
         path = url.pathname;
       } catch {}
     }
+    const pageKey = tab.url ? getPageKey({ url: tab.url }) : null;
     
     // Block ALL updates for 5 seconds to prevent resurrection
     setClearedFor(5000);
     
     // Clear storage for this form
-    await clearPersistedDetections(host, path);
+    await clearPersistedDetections(pageKey);
     
     // Tell content script to re-baseline from current live values
     const response = await chrome.tabs.sendMessage(tab.id, { type: 'CLEAR_BASELINE' });
@@ -1027,7 +1075,7 @@ async function reapplyChanges() {
         if (freshResponse?.dirty?.length > 0) {
           const fieldKeys = (freshResponse.dirty || []).map(f => f.key);
           const allFieldKeys = freshResponse.allFieldKeys || fieldKeys;
-          currentFingerprint = createFingerprint(freshResponse.host, freshResponse.path, allFieldKeys);
+          currentFingerprint = createFingerprint(getPageKey(freshResponse), allFieldKeys);
           
           // Save fresh data to storage
           if (persistEnabled) {
@@ -1195,7 +1243,8 @@ chrome.runtime.onMessage.addListener(async (message, sender) => {
     
     const fieldKeys = (data.dirty || []).map(f => f.key);
     const allFieldKeys = data.allFieldKeys || fieldKeys;
-    currentFingerprint = createFingerprint(data.host, data.path, allFieldKeys);
+    const pageKey = getPageKey(data);
+    currentFingerprint = createFingerprint(pageKey, allFieldKeys);
     
     if (hasDirtyData) {
       // Real dirty data = user made an edit
@@ -1205,7 +1254,7 @@ chrome.runtime.onMessage.addListener(async (message, sender) => {
       // If we're in cleared session, this is the first edit after Clear
       if (panelClearedSession) {
         // Remove the cleared marker, unlock saves
-        await removePageClearedMarker(data.host, data.path);
+        await removePageClearedMarker(pageKey);
         // panelClearedSession is now false (set by removePageClearedMarker)
       }
       
@@ -1439,7 +1488,16 @@ async function init() {
 // Skip auto-bootstrapping under the jsdom test harness so a test can drive the
 // captured message/tab listeners deterministically. The flag is never set in the
 // real extension, so production behavior is unchanged.
-if (!(typeof window !== 'undefined' && window.__CHANGEPREVIEW_TEST__)) {
+if (typeof window !== 'undefined' && window.__CHANGEPREVIEW_TEST__) {
+  // Expose the pure identity/keying helpers so the harness can unit-test the
+  // canonicalization rules without reaching into module internals.
+  window.__changePreviewPanelInternals = {
+    canonicalizePageUrl,
+    getPageKey,
+    createFingerprint,
+    isTrackingParam,
+  };
+} else {
   init();
   setInterval(refreshData, 2000);
 }
