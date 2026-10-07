@@ -139,7 +139,7 @@ The extension uses a sophisticated label resolution algorithm to find the human-
 ## Known Limitations
 
 - **Shadow DOM** — Fields inside closed Shadow DOM roots (e.g., some Salesforce Lightning components) cannot be accessed. The coverage meter shows partial coverage when this occurs.
-- **Iframes** — Only the top-level page the user is on drives the tracked URL, badge, and save-confirm. Forms rendered inside iframes (including CDN/widget iframes such as those on SPA dashboards) are not tracked, so the tracked identity always stays on the real page host instead of hopping to a sub-frame/CDN URL.
+- **Iframes** — The tracked URL, badge, and save-confirm identity are always driven by the real top-level page, so the tracked identity stays on the page host instead of hopping to a sub-frame/CDN URL. Forms rendered inside same-origin iframes (e.g. dashboard panels/overlays) are still detected: each frame reports its fields up to the top frame, which aggregates them under the top-level identity. Cross-origin iframes remain inaccessible to the content script and cannot be tracked.
 - **Custom widgets** — Non-standard form widgets (custom React/Vue components that don't use native inputs) may not be detected
 - **Async loading** — If form values are populated after page load, the baseline may be incomplete. Use the "Re-snapshot" button to capture the current state.
 - **Form builder variations** — While tested with Microsoft Forms and Google Forms patterns, some form builders may use unique DOM structures that aren't recognized.
