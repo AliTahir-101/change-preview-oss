@@ -7,6 +7,33 @@
 (function() {
   'use strict';
 
+  /**
+   * Is this content script running in the TOP-LEVEL browsing context (the tab's
+   * real page) rather than a sub-frame / iframe?
+   *
+   * The extension injects into all frames (`all_frames: true`) so it can reach
+   * forms rendered inside same-origin iframes. But only the top frame represents
+   * the page the user is actually on. Sub-frames — especially ephemeral CDN /
+   * widget iframes (e.g. b.stripecdn.com, js.stripe.com on dashboard.stripe.com)
+   * — must never drive the tracked identity (host/path shown in the panel, the
+   * storage key, or the badge), otherwise the displayed URL "flits" to whatever
+   * sub-frame last navigated even though the user is still on the real page.
+   *
+   * We therefore let the panel-facing role (field reporting, GET_FIELDS/command
+   * handling, badge updates, and the save-confirm intercept) run only in the top
+   * frame. Comparing window references never throws cross-origin, so this is
+   * safe and generic — no per-site hardcodes.
+   */
+  const IS_TOP_FRAME = (() => {
+    try {
+      return window.top === window.self;
+    } catch {
+      // A thrown SecurityError only happens for cross-origin access, which by
+      // definition means we are NOT the top frame.
+      return false;
+    }
+  })();
+
   const SKIP_TYPES = new Set(['password', 'hidden', 'file']);
   const SENSITIVE_PATTERN = /password|secret|token|ssn|cvv|cvc|otp|api[-_]?key|auth/i;
   const SENSITIVE_AUTOCOMPLETE = new Set([
@@ -1323,6 +1350,9 @@
   }
 
   function updateBadge() {
+    // Only the top frame owns the tab's badge; sub-frames must not clobber it.
+    if (!IS_TOP_FRAME) return;
+
     const dirty = getDirtyFields();
     const count = dirty.length;
     
@@ -1333,6 +1363,11 @@
   }
 
   function notifyPanel() {
+    // Only the top frame reports the page identity to the panel. Sub-frames
+    // (CDN/widget iframes) would otherwise push their own host and make the
+    // tracked URL flit away from the real top-level page.
+    if (!IS_TOP_FRAME) return;
+
     // After Clear/Reapply, suppress notifications to prevent phantom dirty rows
     if (isSuppressed()) return;
     
@@ -2330,6 +2365,13 @@
   }
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    // Only the top frame answers panel requests. If sub-frames also responded to
+    // GET_FIELDS, whichever frame won the race would define the tracked identity,
+    // making the displayed host flit between CDN/widget iframes. Returning false
+    // (not keeping the channel open) lets the top frame's response be the one the
+    // panel receives.
+    if (!IS_TOP_FRAME) return false;
+
     switch (message.type) {
       case 'GET_FIELDS':
         const dirty = getDirtyFields();
@@ -2400,6 +2442,12 @@
   });
 
   function init() {
+    // Sub-frames stay inert: they must not snapshot, report, intercept saves, or
+    // own the badge/identity. Only the top-level page the user is on drives the
+    // extension. This keeps the tracked URL on the real host instead of hopping
+    // to CDN/widget iframes.
+    if (!IS_TOP_FRAME) return;
+
     if (document.readyState === 'loading') {
       document.addEventListener('DOMContentLoaded', () => {
         setTimeout(snapshotBaseline, 300);
