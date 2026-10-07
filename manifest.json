@@ -1,12 +1,15 @@
 {
   "manifest_version": 3,
   "name": "ChangePreview",
-  "version": "0.1.0",
-  "description": "See form changes before you save: compare Was vs Now, export to Markdown or CSV, keep edits locally. Private, nothing uploaded.",
+  "version": "0.2.0",
+  "description": "See form changes before you save: compare Was vs Now, export to Markdown or CSV, keep edits locally. Private, nothing uploaded."
   "permissions": [
     "activeTab",
     "storage",
     "sidePanel"
+  ],
+  "host_permissions": [
+    "https://redacted.example.invalid/*"
   ],
   "action": {
     "default_icon": {
