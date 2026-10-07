@@ -1,0 +1,561 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Microsoft Forms-like Test — ChangePreview Fixture</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    
+    body {
+      font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
+      background: #f3f2f1;
+      min-height: 100vh;
+      padding: 20px;
+    }
+    
+    .form-container {
+      max-width: 640px;
+      margin: 0 auto;
+    }
+    
+    .form-header {
+      background: #0078d4;
+      color: white;
+      padding: 24px;
+      border-radius: 8px 8px 0 0;
+    }
+    
+    .form-title {
+      font-size: 24px;
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+    
+    .form-description {
+      font-size: 14px;
+      opacity: 0.9;
+    }
+    
+    .form-body {
+      background: white;
+      border-radius: 0 0 8px 8px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+    }
+    
+    /* Microsoft Forms question structure */
+    .office-form-question {
+      padding: 24px;
+      border-bottom: 1px solid #edebe9;
+    }
+    
+    .office-form-question:last-child {
+      border-bottom: none;
+    }
+    
+    .office-form-question-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: #323130;
+      margin-bottom: 4px;
+      display: flex;
+      align-items: flex-start;
+    }
+    
+    .question-title-box {
+      flex: 1;
+    }
+    
+    .required-indicator {
+      color: #a4262c;
+      margin-left: 4px;
+    }
+    
+    .question-subtitle {
+      font-size: 12px;
+      color: #605e5c;
+      margin-bottom: 12px;
+    }
+    
+    /* This is what MS Forms adds - the type indicator that should NOT be the label */
+    .question-type-indicator {
+      font-size: 11px;
+      color: #8a8886;
+      font-weight: normal;
+      margin-top: 2px;
+    }
+    
+    /* Input styles */
+    .office-form-textfield {
+      width: 100%;
+      padding: 8px 12px;
+      font-size: 14px;
+      border: 1px solid #8a8886;
+      border-radius: 2px;
+      transition: border-color 0.1s;
+    }
+    
+    .office-form-textfield:focus {
+      outline: none;
+      border-color: #0078d4;
+      border-width: 2px;
+      padding: 7px 11px;
+    }
+    
+    .office-form-textfield::placeholder {
+      color: #8a8886;
+    }
+    
+    textarea.office-form-textfield {
+      min-height: 100px;
+      resize: vertical;
+    }
+    
+    /* Choice/Radio styles - MS Forms pattern */
+    .office-form-question-choices {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    
+    .office-form-choice-container {
+      display: flex;
+      align-items: center;
+      padding: 8px 12px;
+      border: 1px solid #edebe9;
+      border-radius: 2px;
+      cursor: pointer;
+      transition: background 0.1s;
+    }
+    
+    .office-form-choice-container:hover {
+      background: #f3f2f1;
+    }
+    
+    .office-form-choice-container input[type="radio"],
+    .office-form-choice-container input[type="checkbox"] {
+      margin-right: 12px;
+      width: 16px;
+      height: 16px;
+    }
+    
+    .office-form-choice-label {
+      font-size: 14px;
+      color: #323130;
+      flex: 1;
+    }
+    
+    /* Dropdown styles */
+    .office-form-dropdown {
+      width: 100%;
+      padding: 8px 12px;
+      font-size: 14px;
+      border: 1px solid #8a8886;
+      border-radius: 2px;
+      background: white;
+      cursor: pointer;
+    }
+    
+    .office-form-dropdown:focus {
+      outline: none;
+      border-color: #0078d4;
+      border-width: 2px;
+    }
+    
+    /* Rating scale */
+    .office-form-rating {
+      display: flex;
+      gap: 16px;
+      align-items: center;
+    }
+    
+    .rating-label-start,
+    .rating-label-end {
+      font-size: 12px;
+      color: #605e5c;
+    }
+    
+    .rating-options {
+      display: flex;
+      gap: 8px;
+    }
+    
+    .rating-option {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      cursor: pointer;
+    }
+    
+    .rating-option input[type="radio"] {
+      margin-bottom: 4px;
+    }
+    
+    .rating-option-label {
+      font-size: 12px;
+      color: #605e5c;
+    }
+    
+    /* Likert scale */
+    .office-form-likert {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    
+    .office-form-likert th {
+      font-size: 12px;
+      font-weight: normal;
+      color: #605e5c;
+      padding: 8px;
+      text-align: center;
+    }
+    
+    .office-form-likert td {
+      padding: 8px;
+      text-align: center;
+      border-bottom: 1px solid #edebe9;
+    }
+    
+    .office-form-likert td:first-child {
+      text-align: left;
+      font-size: 14px;
+      color: #323130;
+    }
+    
+    /* Submit button */
+    .form-actions {
+      padding: 24px;
+      display: flex;
+      gap: 12px;
+    }
+    
+    .office-form-submit {
+      background: #0078d4;
+      color: white;
+      border: none;
+      padding: 10px 24px;
+      font-size: 14px;
+      font-weight: 600;
+      border-radius: 2px;
+      cursor: pointer;
+      transition: background 0.1s;
+    }
+    
+    .office-form-submit:hover {
+      background: #106ebe;
+    }
+    
+    /* Test info box */
+    .test-info {
+      background: #fff4ce;
+      border: 1px solid #f7d87c;
+      border-radius: 4px;
+      padding: 12px 16px;
+      margin-bottom: 20px;
+      font-size: 13px;
+      color: #323130;
+    }
+    
+    .test-info strong {
+      display: block;
+      margin-bottom: 4px;
+      color: #323130;
+    }
+    
+    .test-info code {
+      background: #f3f2f1;
+      padding: 2px 6px;
+      border-radius: 2px;
+      font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+  <div class="form-container">
+    <div class="test-info">
+      <strong>🧪 Microsoft Forms-like Test Fixture</strong>
+      This page mimics Microsoft Forms' DOM structure. The extension MUST strip type + points suffixes.
+      <br><br>
+      <strong>✅ Label stripping test cases:</strong>
+      <ul style="margin-top: 8px; padding-left: 20px;">
+        <li><code>"He goes ....................every month.Single choice. (1 Point)"</code><br>→ must show <strong>"He goes ....................every month."</strong> only</li>
+        <li><code>"What is your name ?Multi Line Text."</code> → must show <strong>"What is your name ?"</strong></li>
+        <li><code>"Rate this course.Rating (2 Points)"</code> → must show <strong>"Rate this course."</strong></li>
+        <li>Type appears ONLY via info icon (ℹ️) tooltip — hover to see it</li>
+        <li>Tooltip must appear ABOVE the icon, not below</li>
+      </ul>
+      <br>
+      <strong>❌ Should NOT show in Field column:</strong>
+      <ul style="margin-top: 8px; padding-left: 20px;">
+        <li>"Single choice", "Multi Line Text", "Choice", "Text", "Rating", etc.</li>
+        <li>"(1 Point)", "(2 Points)", or any points suffix</li>
+        <li>Option values like "Three by one" (belongs in Was/Now only)</li>
+      </ul>
+    </div>
+    
+    <div class="form-header">
+      <h1 class="form-title">Student Registration Form</h1>
+      <p class="form-description">Please complete all required fields.</p>
+    </div>
+    
+    <div class="form-body">
+      <form id="msFormsLike">
+        <!-- Question 1: Text input (single line) -->
+        <div class="office-form-question" data-question-type="text">
+          <div class="office-form-question-title">
+            <span class="question-title-box">What is your email address?</span>
+            <span class="required-indicator">*</span>
+          </div>
+          <div class="question-type-indicator">Single line text</div>
+          <input type="email" 
+                 class="office-form-textfield" 
+                 name="email" 
+                 placeholder="Enter your email"
+                 value="student@example.com"
+                 required>
+        </div>
+        
+        <!-- Question 2: Textarea (multi-line) - Ali's first example -->
+        <!-- MS Forms often puts type in aria-label: "What is your name ?Multi Line Text." -->
+        <div class="office-form-question" data-question-type="multiline">
+          <div class="office-form-question-title">
+            <span class="question-title-box">What is your name ?</span>
+            <span class="required-indicator">*</span>
+          </div>
+          <div class="question-type-indicator">Multi Line Text.</div>
+          <textarea class="office-form-textfield" 
+                    name="full_name" 
+                    aria-label="What is your name ?Multi Line Text."
+                    placeholder="Enter your full name"
+                    required>John Smith</textarea>
+        </div>
+        
+        <!-- Question 2b: Test with concatenated aria-label (no space before type) -->
+        <div class="office-form-question" data-question-type="text">
+          <div class="office-form-question-title">
+            <span class="question-title-box">Enter your student ID</span>
+          </div>
+          <div class="question-type-indicator">Text</div>
+          <input type="text" 
+                 class="office-form-textfield" 
+                 name="student_id"
+                 aria-label="Enter your student IDText"
+                 value="STU-12345">
+        </div>
+        
+        <!-- Question 2c: Ali's exact failing case - type + points suffix -->
+        <div class="office-form-question" data-question-type="choice">
+          <div class="office-form-question-title">
+            <span class="question-title-box">He goes ....................every month.</span>
+          </div>
+          <div class="question-type-indicator">Single choice. (1 Point)</div>
+          <div class="office-form-question-choices" role="radiogroup">
+            <label class="office-form-choice-container">
+              <input type="radio" name="fill_in_blank" value="to shopping"
+                     aria-label="He goes ....................every month.Single choice. (1 Point)">
+              <span class="office-form-choice-label">to shopping</span>
+            </label>
+            <label class="office-form-choice-container">
+              <input type="radio" name="fill_in_blank" value="shopping" checked>
+              <span class="office-form-choice-label">shopping</span>
+            </label>
+            <label class="office-form-choice-container">
+              <input type="radio" name="fill_in_blank" value="for shopping">
+              <span class="office-form-choice-label">for shopping</span>
+            </label>
+          </div>
+        </div>
+        
+        <!-- Question 2d: Rating with points -->
+        <div class="office-form-question" data-question-type="rating">
+          <div class="office-form-question-title">
+            <span class="question-title-box">Rate this course.</span>
+          </div>
+          <div class="question-type-indicator">Rating (2 Points)</div>
+          <div class="office-form-rating" role="radiogroup">
+            <div class="rating-options">
+              <label class="rating-option">
+                <input type="radio" name="course_rating_points" value="1"
+                       aria-label="Rate this course.Rating (2 Points)">
+                <span class="rating-option-label">1</span>
+              </label>
+              <label class="rating-option">
+                <input type="radio" name="course_rating_points" value="2">
+                <span class="rating-option-label">2</span>
+              </label>
+              <label class="rating-option">
+                <input type="radio" name="course_rating_points" value="3" checked>
+                <span class="rating-option-label">3</span>
+              </label>
+              <label class="rating-option">
+                <input type="radio" name="course_rating_points" value="4">
+                <span class="rating-option-label">4</span>
+              </label>
+              <label class="rating-option">
+                <input type="radio" name="course_rating_points" value="5">
+                <span class="rating-option-label">5</span>
+              </label>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Question 3: Radio choice - color -->
+        <div class="office-form-question" data-question-type="choice">
+          <div class="office-form-question-title">
+            <span class="question-title-box">What is your favorite color?</span>
+          </div>
+          <div class="question-type-indicator">Choice</div>
+          <div class="office-form-question-choices" role="radiogroup" aria-labelledby="color-question">
+            <label class="office-form-choice-container">
+              <input type="radio" name="favorite_color" value="red">
+              <span class="office-form-choice-label">Red</span>
+            </label>
+            <label class="office-form-choice-container">
+              <input type="radio" name="favorite_color" value="blue" checked>
+              <span class="office-form-choice-label">Blue</span>
+            </label>
+            <label class="office-form-choice-container">
+              <input type="radio" name="favorite_color" value="green">
+              <span class="office-form-choice-label">Green</span>
+            </label>
+            <label class="office-form-choice-container">
+              <input type="radio" name="favorite_color" value="yellow">
+              <span class="office-form-choice-label">Yellow</span>
+            </label>
+          </div>
+        </div>
+        
+        <!-- Question 4: Radio choice - class - Ali's second example -->
+        <div class="office-form-question" data-question-type="choice">
+          <div class="office-form-question-title">
+            <span class="question-title-box">Which class are you in?</span>
+            <span class="required-indicator">*</span>
+          </div>
+          <div class="question-type-indicator">Choice</div>
+          <div class="office-form-question-choices" role="radiogroup">
+            <label class="office-form-choice-container">
+              <input type="radio" name="class_selection" value="1x1" required>
+              <span class="office-form-choice-label">One by one</span>
+            </label>
+            <label class="office-form-choice-container">
+              <input type="radio" name="class_selection" value="2x1">
+              <span class="office-form-choice-label">Two by one</span>
+            </label>
+            <label class="office-form-choice-container">
+              <input type="radio" name="class_selection" value="3x1" checked>
+              <span class="office-form-choice-label">Three by one</span>
+            </label>
+            <label class="office-form-choice-container">
+              <input type="radio" name="class_selection" value="4x1">
+              <span class="office-form-choice-label">Four by one</span>
+            </label>
+          </div>
+        </div>
+        
+        <!-- Question 5: Dropdown -->
+        <div class="office-form-question" data-question-type="dropdown">
+          <div class="office-form-question-title">
+            <span class="question-title-box">What is your year of study?</span>
+          </div>
+          <div class="question-type-indicator">Dropdown</div>
+          <select class="office-form-dropdown" name="year_of_study">
+            <option value="">Select an option</option>
+            <option value="1">First Year</option>
+            <option value="2" selected>Second Year</option>
+            <option value="3">Third Year</option>
+            <option value="4">Fourth Year</option>
+          </select>
+        </div>
+        
+        <!-- Question 6: Checkbox group (multiple selection) -->
+        <div class="office-form-question" data-question-type="checkbox">
+          <div class="office-form-question-title">
+            <span class="question-title-box">Select your interests</span>
+          </div>
+          <div class="question-type-indicator">Checkbox</div>
+          <div class="question-subtitle">Select all that apply</div>
+          <div class="office-form-question-choices" role="group">
+            <label class="office-form-choice-container">
+              <input type="checkbox" name="interests" value="sports" checked>
+              <span class="office-form-choice-label">Sports</span>
+            </label>
+            <label class="office-form-choice-container">
+              <input type="checkbox" name="interests" value="music">
+              <span class="office-form-choice-label">Music</span>
+            </label>
+            <label class="office-form-choice-container">
+              <input type="checkbox" name="interests" value="art" checked>
+              <span class="office-form-choice-label">Art</span>
+            </label>
+            <label class="office-form-choice-container">
+              <input type="checkbox" name="interests" value="technology">
+              <span class="office-form-choice-label">Technology</span>
+            </label>
+          </div>
+        </div>
+        
+        <!-- Question 7: Rating scale -->
+        <div class="office-form-question" data-question-type="rating">
+          <div class="office-form-question-title">
+            <span class="question-title-box">How would you rate this form?</span>
+          </div>
+          <div class="question-type-indicator">Rating</div>
+          <div class="office-form-rating" role="radiogroup">
+            <span class="rating-label-start">Poor</span>
+            <div class="rating-options">
+              <label class="rating-option">
+                <input type="radio" name="form_rating" value="1">
+                <span class="rating-option-label">1</span>
+              </label>
+              <label class="rating-option">
+                <input type="radio" name="form_rating" value="2">
+                <span class="rating-option-label">2</span>
+              </label>
+              <label class="rating-option">
+                <input type="radio" name="form_rating" value="3" checked>
+                <span class="rating-option-label">3</span>
+              </label>
+              <label class="rating-option">
+                <input type="radio" name="form_rating" value="4">
+                <span class="rating-option-label">4</span>
+              </label>
+              <label class="rating-option">
+                <input type="radio" name="form_rating" value="5">
+                <span class="rating-option-label">5</span>
+              </label>
+            </div>
+            <span class="rating-label-end">Excellent</span>
+          </div>
+        </div>
+        
+        <!-- Question 8: Long text response -->
+        <div class="office-form-question" data-question-type="multiline">
+          <div class="office-form-question-title">
+            <span class="question-title-box">Any additional comments?</span>
+          </div>
+          <div class="question-type-indicator">Multi-line text</div>
+          <div class="question-subtitle">Optional feedback</div>
+          <textarea class="office-form-textfield" 
+                    name="comments" 
+                    placeholder="Enter your response"></textarea>
+        </div>
+        
+        <div class="form-actions">
+          <button type="submit" class="office-form-submit">Submit</button>
+        </div>
+      </form>
+    </div>
+  </div>
+  
+  <script>
+    document.getElementById('msFormsLike').addEventListener('submit', function(e) {
+      e.preventDefault();
+      alert('Form submitted! (In a real MS Forms, this would save to Microsoft 365)');
+    });
+  </script>
+</body>
+</html>
