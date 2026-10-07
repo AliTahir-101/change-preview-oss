@@ -174,6 +174,30 @@ This is a Manifest V3 Chrome extension. The structure is:
     └── aspnet-checkboxlist.html # ASP.NET CheckBoxList/RadioButtonList test page
 ```
 
+## Paid Unlock
+
+ChangePreview is **free to install**. Preview mode (seeing what changed) works without a license.
+
+**Full features require a €9.99 one-time purchase:**
+- Keep changes after reload
+- Reapply saved changes
+- Clear detections
+- Export to Markdown & CSV
+
+The purchase is handled via Stripe, sold by **NextGen Folks** (not Google).
+
+### License API
+
+The license server is a Cloudflare Worker in the `worker/` directory. See [`worker/README.md`](worker/README.md) for deployment instructions.
+
+**Required setup for deployment:**
+1. Create Cloudflare KV namespace
+2. Set secrets: `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`
+3. Deploy with `wrangler deploy`
+4. Create Stripe Payment Link (€9.99 one-time)
+5. Configure Stripe webhook to point to `/stripe/webhook`
+6. Update `panel/config.js` with your worker URL and Payment Link URL
+
 ## License
 
 MIT

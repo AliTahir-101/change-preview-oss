@@ -3,7 +3,20 @@
  * Displays dirty fields, copy Markdown/CSV, re-snapshot.
  */
 
+import {
+  getLicenseState,
+  isUnlocked,
+  activateLicense,
+  isValidKeyFormat,
+  openPurchasePage,
+  getUnlockInfo,
+} from './license.js';
+
+let isLicenseValid = false;
+
 const elements = {
+  // Main panel elements
+  mainPanel: document.getElementById('mainPanel'),
   hostInfo: document.getElementById('hostInfo'),
   changeCount: document.getElementById('changeCount'),
   coverage: document.getElementById('coverage'),
@@ -22,7 +35,18 @@ const elements = {
   confirmDialog: document.getElementById('confirmDialog'),
   confirmCancel: document.getElementById('confirmCancel'),
   confirmClear: document.getElementById('confirmClear'),
-  toast: document.getElementById('toast')
+  toast: document.getElementById('toast'),
+  
+  // Unlock screen elements
+  unlockScreen: document.getElementById('unlockScreen'),
+  unlockPrice: document.getElementById('unlockPrice'),
+  buyBtn: document.getElementById('buyBtn'),
+  licenseKeyInput: document.getElementById('licenseKeyInput'),
+  activateBtn: document.getElementById('activateBtn'),
+  unlockError: document.getElementById('unlockError'),
+  sellerName: document.getElementById('sellerName'),
+  supportLink: document.getElementById('supportLink'),
+  privacyLink: document.getElementById('privacyLink'),
 };
 
 const COPY_ICON_SVG = '<rect x="9" y="9" width="13" height="13" rx="2" stroke="currentColor" stroke-width="2" fill="none"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" stroke="currentColor" stroke-width="2" fill="none"/>';
@@ -1037,20 +1061,46 @@ function downloadMarkdown() {
 }
 
 elements.copyMarkdown.addEventListener('click', () => {
+  if (!isLicenseValid) {
+    showToast('Unlock to use export features');
+    return;
+  }
   const md = generateMarkdown();
   if (md) copyToClipboard(md, 'Markdown');
 });
 
-elements.downloadMarkdown.addEventListener('click', downloadMarkdown);
+elements.downloadMarkdown.addEventListener('click', () => {
+  if (!isLicenseValid) {
+    showToast('Unlock to use export features');
+    return;
+  }
+  downloadMarkdown();
+});
 
 elements.copyCsv.addEventListener('click', () => {
+  if (!isLicenseValid) {
+    showToast('Unlock to use export features');
+    return;
+  }
   const csv = generateCsv();
   if (csv) copyToClipboard(csv, 'CSV');
 });
 
-elements.downloadCsv.addEventListener('click', downloadCsv);
+elements.downloadCsv.addEventListener('click', () => {
+  if (!isLicenseValid) {
+    showToast('Unlock to use export features');
+    return;
+  }
+  downloadCsv();
+});
 
-elements.clearDetections.addEventListener('click', showConfirmDialog);
+elements.clearDetections.addEventListener('click', () => {
+  if (!isLicenseValid) {
+    showToast('Unlock to clear detections');
+    return;
+  }
+  showConfirmDialog();
+});
 
 elements.confirmCancel.addEventListener('click', hideConfirmDialog);
 
@@ -1060,11 +1110,22 @@ elements.confirmClear.addEventListener('click', () => {
 });
 
 elements.persistToggle.addEventListener('change', (e) => {
+  if (!isLicenseValid) {
+    e.target.checked = false;
+    showToast('Unlock to keep changes after reload');
+    return;
+  }
   savePersistSetting(e.target.checked);
   updateReapplyVisibility();
 });
 
-elements.reapplyChanges.addEventListener('click', reapplyChanges);
+elements.reapplyChanges.addEventListener('click', () => {
+  if (!isLicenseValid) {
+    showToast('Unlock to reapply changes');
+    return;
+  }
+  reapplyChanges();
+});
 
 chrome.runtime.onMessage.addListener(async (message) => {
   if (message.type === 'FIELDS_UPDATE') {
@@ -1151,7 +1212,154 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
   }
 });
 
+/**
+ * Show the unlock screen and hide the main panel.
+ */
+function showUnlockScreen() {
+  elements.unlockScreen.classList.remove('hidden');
+  elements.mainPanel.classList.add('hidden');
+  
+  const info = getUnlockInfo();
+  elements.unlockPrice.textContent = info.price;
+  elements.sellerName.textContent = info.seller;
+  elements.supportLink.href = `mailto:${info.supportEmail}`;
+  elements.privacyLink.href = info.privacyUrl;
+}
+
+/**
+ * Hide the unlock screen and show the main panel.
+ */
+function hideUnlockScreen() {
+  elements.unlockScreen.classList.add('hidden');
+  elements.mainPanel.classList.remove('hidden');
+}
+
+/**
+ * Show unlock error message.
+ */
+function showUnlockError(message) {
+  elements.unlockError.textContent = message;
+  elements.unlockError.classList.remove('hidden');
+}
+
+/**
+ * Hide unlock error message.
+ */
+function hideUnlockError() {
+  elements.unlockError.classList.add('hidden');
+}
+
+/**
+ * Format license key input as user types (add dashes).
+ */
+function formatLicenseKeyInput(e) {
+  const input = e.target;
+  let value = input.value.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+  
+  const chunks = value.match(/.{1,4}/g) || [];
+  input.value = chunks.slice(0, 4).join('-');
+}
+
+/**
+ * Handle license activation form submission.
+ */
+async function handleActivate() {
+  const key = elements.licenseKeyInput.value.trim();
+  
+  if (!key) {
+    showUnlockError('Please enter a license key');
+    return;
+  }
+  
+  if (!isValidKeyFormat(key)) {
+    showUnlockError('Invalid license key format (expected XXXX-XXXX-XXXX-XXXX)');
+    return;
+  }
+  
+  hideUnlockError();
+  elements.activateBtn.disabled = true;
+  elements.activateBtn.textContent = 'Activating...';
+  
+  try {
+    const result = await activateLicense(key);
+    
+    if (result.ok) {
+      isLicenseValid = true;
+      hideUnlockScreen();
+      updateFeatureGating();
+      showToast('License activated! Full features unlocked.');
+    } else {
+      showUnlockError(result.error || 'Activation failed');
+    }
+  } catch (err) {
+    console.error('Activation error:', err);
+    showUnlockError('Network error - please try again');
+  } finally {
+    elements.activateBtn.disabled = false;
+    elements.activateBtn.textContent = 'Activate';
+  }
+}
+
+/**
+ * Handle buy button click.
+ */
+function handleBuy() {
+  openPurchasePage();
+}
+
+/**
+ * Update feature gating based on license state.
+ * When unlocked: all features available.
+ * When locked: Keep, Reapply, Clear, and export are disabled.
+ */
+function updateFeatureGating() {
+  const locked = !isLicenseValid;
+  
+  elements.persistToggle.disabled = locked;
+  elements.persistToggle.parentElement.classList.toggle('feature-locked', locked);
+  
+  elements.copyMarkdown.classList.toggle('feature-locked', locked);
+  elements.downloadMarkdown.classList.toggle('feature-locked', locked);
+  elements.copyCsv.classList.toggle('feature-locked', locked);
+  elements.downloadCsv.classList.toggle('feature-locked', locked);
+  
+  elements.clearDetections.classList.toggle('feature-locked', locked);
+  elements.reapplyChanges.classList.toggle('feature-locked', locked);
+  
+  if (locked) {
+    elements.persistToggle.checked = false;
+    persistEnabled = false;
+  }
+}
+
+/**
+ * Setup unlock screen event listeners.
+ */
+function setupUnlockListeners() {
+  elements.buyBtn.addEventListener('click', handleBuy);
+  elements.activateBtn.addEventListener('click', handleActivate);
+  
+  elements.licenseKeyInput.addEventListener('input', formatLicenseKeyInput);
+  elements.licenseKeyInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      handleActivate();
+    }
+  });
+}
+
 async function init() {
+  setupUnlockListeners();
+  
+  isLicenseValid = await isUnlocked();
+  
+  if (!isLicenseValid) {
+    showUnlockScreen();
+  } else {
+    hideUnlockScreen();
+  }
+  
+  updateFeatureGating();
+  
   await loadPersistSetting();
   await refreshData();
   updateReapplyVisibility();

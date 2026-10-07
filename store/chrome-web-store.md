@@ -59,11 +59,19 @@ or cross-origin iframes that it can't read. When it can't track everything, it t
 you rather than pretending it captured more than it did. Please treat coverage with a
 healthy grain of salt and verify important changes before saving.
 
+Pricing:
+
+Free to install. Preview mode shows you what changed at no cost. Full features require
+a €9.99 one-time purchase via Stripe. This unlocks Keep after reload, Reapply changes,
+Clear detections, and Export to Markdown or CSV. The purchase is handled outside the
+extension through Stripe — NextGen Folks is the seller, not Google.
+
 Privacy:
 
 Your data stays on your device. ChangePreview uses local browser storage only
 (chrome.storage.local). It does not send your field values anywhere, has no accounts,
 and does no remote tracking. Passwords and sensitive fields are intentionally skipped.
+License activation requests are sent to our license server, but no form data is included.
 
 Built by NextGen Folks. Questions or feedback? Email info@nextgenfolks.com.
 
@@ -106,11 +114,21 @@ save, keeping all data local to your browser.
 
 ## Pricing note
 
-Intended price: €9.99 EUR, one-time.
+Intended price: €9.99 EUR, one-time, via Stripe Payment Link (not Chrome Web Store payments).
 
-The actual price is set in the Chrome Web Store developer dashboard (and/or via the
-in-app/payments configuration), not in this repository or the manifest. This file only
-documents the intended price; set it in the dashboard at publish time.
+The purchase is handled outside the extension through Stripe. NextGen Folks is the
+seller, not Google. This is disclosed in the detailed description above.
+
+Features gated behind the paid unlock:
+- Keep detections after reload
+- Reapply saved changes
+- Clear detections
+- Export to Markdown & CSV
+
+Free features (always available):
+- Preview Was vs Now changes
+- Save confirmation modal
+- Dark mode
 
 ---
 
@@ -122,12 +140,25 @@ Use these bullets when completing the dashboard's privacy / data-use disclosures
   chrome.storage.local on the user's device.
 - No remote collection: the extension does not transmit form values or any personal
   data to NextGen Folks or any third party.
-- No analytics or tracking, and no user accounts.
+- License activation: when activating a license key, the extension sends only the
+  license key and a random instance ID to our license server. No form data is included.
+- No analytics or tracking, and no user accounts (beyond optional license activation).
 - Sensitive data minimization: password and other sensitive fields are skipped and not
   recorded.
 - Permissions are limited to what's needed to read the current form and show the panel
-  (activeTab, storage, sidePanel); no host network permissions are requested.
+  (activeTab, storage, sidePanel); host_permissions for redacted.example.invalid is used only for
+  license activation/validation.
 
 Single purpose (dashboard): see the Single-purpose statement above.
 
 Support / feedback contact: info@nextgenfolks.com
+
+---
+
+## Store URLs
+
+| Field | URL |
+|-------|-----|
+| Homepage | https://nextgenfolks.com/products/change-preview |
+| Support | mailto:info@nextgenfolks.com |
+| Privacy Policy | https://nextgenfolks.com/privacy |
