@@ -577,17 +577,33 @@ async function copyToClipboard(text, format) {
   }
 }
 
-async function refreshData() {
+async function refreshData(explicitTabId) {
   if (isCleared()) {
     return;
   }
   
+  // Resolve the tab to read. When an explicit tab id is provided (tab activated
+  // or window focus changed), bind to THAT tab directly rather than relying on
+  // chrome.tabs.query({currentWindow:true}), which from a side-panel context can
+  // resolve to the wrong window and leave the panel stuck on the previous tab.
+  // activeTabId is updated here so the newly bound tab's FIELDS_UPDATE pushes are
+  // accepted (and the old tab's are rejected) even if GET_FIELDS below throws.
+  let tab = null;
   try {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab?.id) return;
-    activeTabId = tab.id;
-    
-    const response = await chrome.tabs.sendMessage(tab.id, { type: 'GET_FIELDS' });
+    if (explicitTabId != null) {
+      tab = await chrome.tabs.get(explicitTabId);
+    } else {
+      [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    }
+  } catch {
+    tab = null;
+  }
+  if (!tab?.id) return;
+  const tabId = tab.id;
+  activeTabId = tabId;
+  
+  try {
+    const response = await chrome.tabs.sendMessage(tabId, { type: 'GET_FIELDS' });
     if (response) {
       const fieldKeys = (response.dirty || []).map(f => f.key);
       const allFieldKeys = response.allFieldKeys || fieldKeys;
@@ -674,7 +690,8 @@ async function refreshData() {
     // Don't restore from storage if cleared or not just reloaded
     if (isCleared() || panelClearedSession || !justReloaded) return;
     
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    // Reuse the tab resolved at the top (do NOT re-query currentWindow, which can
+    // point at a different window from a side panel).
     if (tab?.url && persistEnabled) {
       try {
         const url = new URL(tab.url);
@@ -1300,9 +1317,28 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
   activeTabId = activeInfo.tabId;
   // New tab activated - treat as a fresh session for Reapply logic
   justReloaded = true;
-  await refreshData();
+  // Bind to the exact activated tab (not a currentWindow query) so the host +
+  // detections switch to it immediately.
+  await refreshData(activeInfo.tabId);
   await updateReapplyVisibility();
 });
+
+// Switching browser WINDOWS also changes which page the user is looking at, but
+// does not fire tabs.onActivated. Rebind to the newly focused window's active tab
+// so the panel follows the user across windows too.
+if (chrome.windows?.onFocusChanged) {
+  chrome.windows.onFocusChanged.addListener(async (windowId) => {
+    if (windowId === chrome.windows.WINDOW_ID_NONE) return;
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, windowId });
+      if (!tab?.id) return;
+      activeTabId = tab.id;
+      justReloaded = true;
+      await refreshData(tab.id);
+      await updateReapplyVisibility();
+    } catch {}
+  });
+}
 
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
   // Only react to navigation of the tab the panel is bound to. A background tab
@@ -1318,7 +1354,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
   }
   if (changeInfo.status === 'complete') {
     justReloaded = true;
-    await refreshData();
+    await refreshData(tabId);
     await updateReapplyVisibility();
   }
 });
