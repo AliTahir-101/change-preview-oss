@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>ASP.NET WebForms CheckBoxList / RadioButtonList fixture</title></head>
+<body>
+<!--
+  Generic fixture for the ASP.NET WebForms (and similar admin UI) rendering of
+  a RadioButtonList / CheckBoxList. This is NOT tied to any particular site —
+  it only reproduces the portable structural pattern:
+
+  - The list renders as a <table> whose id is the server control id.
+  - The section question is a heading label (<h2><label class="control-label"
+    for="<listId>">) whose `for` points at the TABLE / list id, NOT at an
+    individual option input.
+  - Each option input has its OWN unique id ("<listId>_0", "<listId>_1", ...)
+    and its OWN name ("...$0", "...$1", ...) — options do NOT share a name for
+    CheckBoxList; RadioButtonList options DO share a name.
+  - Wrapper blocks use an id like "divContainer_*" and Bootstrap grid/form
+    classes (col-sm-*, form-group) — again, generic, not site-specific.
+-->
+<form id="mainform" method="post">
+
+<!-- RadioButtonList: options share a name; section label `for` -> table id. -->
+<div id="ContentPlaceHolder1_divContainer_CurrentlyRenting" class="col-sm-12 form-group">
+  <h2><label for="ContentPlaceHolder1_rblCurrentlyRenting" id="ContentPlaceHolder1_lblCurrentlyRenting" class="control-label">Are any of the applicants currently <br>living in an apartment at the property?</label></h2>
+  <div class="radio-list">
+    <table id="ContentPlaceHolder1_rblCurrentlyRenting">
+      <tr>
+        <td><input id="ContentPlaceHolder1_rblCurrentlyRenting_0" type="radio" name="ctl00$ContentPlaceHolder1$rblCurrentlyRenting" value="0"><label for="ContentPlaceHolder1_rblCurrentlyRenting_0">No</label></td>
+        <td><input id="ContentPlaceHolder1_rblCurrentlyRenting_1" type="radio" name="ctl00$ContentPlaceHolder1$rblCurrentlyRenting" value="1"><label for="ContentPlaceHolder1_rblCurrentlyRenting_1">Yes</label></td>
+      </tr>
+    </table>
+  </div>
+</div>
+
+<!-- CheckBoxList: each option has a UNIQUE name; section label `for` -> table id. -->
+<div id="ContentPlaceHolder1_divContainer_HouseType" class="col-sm-12 form-group">
+  <h2><label for="ContentPlaceHolder1_cblHouseType" id="ContentPlaceHolder1_lblHouseType" class="control-label">House type</label></h2>
+  <div class="checkbox-list">
+    <table id="ContentPlaceHolder1_cblHouseType">
+      <tr>
+        <td><input id="ContentPlaceHolder1_cblHouseType_0" type="checkbox" name="ctl00$ContentPlaceHolder1$cblHouseType$0" value="2"><label for="ContentPlaceHolder1_cblHouseType_0">Block of flats</label></td>
+        <td><input id="ContentPlaceHolder1_cblHouseType_1" type="checkbox" name="ctl00$ContentPlaceHolder1$cblHouseType$1" value="6"><label for="ContentPlaceHolder1_cblHouseType_1">Detached house</label></td>
+      </tr>
+      <tr>
+        <td><input id="ContentPlaceHolder1_cblHouseType_2" type="checkbox" name="ctl00$ContentPlaceHolder1$cblHouseType$2" value="3"><label for="ContentPlaceHolder1_cblHouseType_2">Semi-detached house</label></td>
+        <td><input id="ContentPlaceHolder1_cblHouseType_3" type="checkbox" name="ctl00$ContentPlaceHolder1$cblHouseType$3" value="4"><label for="ContentPlaceHolder1_cblHouseType_3">Terraced house</label></td>
+      </tr>
+      <tr>
+        <td><input id="ContentPlaceHolder1_cblHouseType_4" type="checkbox" name="ctl00$ContentPlaceHolder1$cblHouseType$4" value="5"><label for="ContentPlaceHolder1_cblHouseType_4">Nursing home</label></td>
+        <td></td>
+      </tr>
+    </table>
+  </div>
+</div>
+
+<!-- Second CheckBoxList: the section label here has no id, only `for`. -->
+<div id="ContentPlaceHolder1_divContainer_ApartmentType" class="col-sm-12 form-group">
+  <h2><label for="ContentPlaceHolder1_cblApartmentType" class="control-label">Apartment type</label></h2>
+  <div class="checkbox-list">
+    <table id="ContentPlaceHolder1_cblApartmentType">
+      <tr>
+        <td><input id="ContentPlaceHolder1_cblApartmentType_0" type="checkbox" name="ctl00$ContentPlaceHolder1$cblApartmentType$0" value="1"><label for="ContentPlaceHolder1_cblApartmentType_0">1 room</label></td>
+        <td><input id="ContentPlaceHolder1_cblApartmentType_1" type="checkbox" name="ctl00$ContentPlaceHolder1$cblApartmentType$1" value="2"><label for="ContentPlaceHolder1_cblApartmentType_1">2 rooms</label></td>
+      </tr>
+    </table>
+  </div>
+</div>
+
+</form>
+</body></html>
