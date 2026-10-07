@@ -12,6 +12,14 @@ ChangePreview
 
 ---
 
+## Store URLs
+
+- Homepage / website URL: https://nextgenfolks.com/
+- Privacy policy URL: https://nextgenfolks.com/privacy
+- Product / support page: https://nextgenfolks.com/products/change-preview
+
+---
+
 ## Short description (≤132 characters)
 
 Identical to the `description` field in `manifest.json`:
@@ -64,6 +72,8 @@ Privacy:
 Your data stays on your device. ChangePreview uses local browser storage only
 (chrome.storage.local). It does not send your field values anywhere, has no accounts,
 and does no remote tracking. Passwords and sensitive fields are intentionally skipped.
+
+More about ChangePreview: https://nextgenfolks.com/products/change-preview
 
 Built by NextGen Folks. Questions or feedback? Email info@nextgenfolks.com.
 
@@ -131,3 +141,5 @@ Use these bullets when completing the dashboard's privacy / data-use disclosures
 Single purpose (dashboard): see the Single-purpose statement above.
 
 Support / feedback contact: info@nextgenfolks.com
+
+Privacy policy URL (for dashboard): https://nextgenfolks.com/privacy
