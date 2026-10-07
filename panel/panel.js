@@ -79,14 +79,49 @@ function getClearedMarkerKey(host, path) {
 }
 
 /**
- * Check if a page has a cleared marker (survives panel reload).
+ * Check if a page has an ACTIVE cleared marker.
+ * A marker is active only if:
+ * 1. It exists with untilEdit: true
+ * 2. There's no saved detection data AFTER the clearedAt timestamp
+ * 
+ * If there's newer saved data, the marker is stale (user made new edits)
+ * and we should restore normally.
  */
 async function hasPageClearedMarker(host, path) {
   if (!host) return false;
   try {
-    const key = getClearedMarkerKey(host, path);
-    const result = await chrome.storage.local.get(key);
-    return !!result[key]?.untilEdit;
+    const markerKey = getClearedMarkerKey(host, path);
+    const all = await chrome.storage.local.get(null);
+    const marker = all[markerKey];
+    
+    if (!marker?.untilEdit) {
+      return false;
+    }
+    
+    // Check if there's any saved detection data AFTER clearedAt
+    const clearedAt = marker.clearedAt || 0;
+    const normalizedPath = (path || '/').replace(/\/+$/, '') || '/';
+    
+    for (const [key, value] of Object.entries(all)) {
+      if (!key.startsWith(STORAGE_PREFIX)) continue;
+      
+      // Check if this is data for the same page
+      const valueHost = value?.host || '';
+      const valuePath = (value?.path || '/').replace(/\/+$/, '') || '/';
+      
+      if (valueHost === host && valuePath === normalizedPath) {
+        // Found saved data for this page - check timestamp
+        const savedAt = value?.savedAt || 0;
+        if (savedAt > clearedAt) {
+          // Newer data exists, marker is stale - remove it and allow restore
+          await chrome.storage.local.remove(markerKey);
+          return false;
+        }
+      }
+    }
+    
+    // Marker is active, no newer data exists
+    return true;
   } catch {
     return false;
   }
