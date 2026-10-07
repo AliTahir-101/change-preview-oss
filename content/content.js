@@ -1179,6 +1179,33 @@
     const results = { applied: 0, failed: 0, total: changes.length, failures: [] };
     
     for (const change of changes) {
+      // Checkbox groups (multi-select) span multiple elements - handle specially.
+      // There is no single element to key on, so match by the group key/label.
+      if (isCheckboxGroupChange(change)) {
+        try {
+          const ok = applyCheckboxGroupChange(change);
+          if (ok) {
+            // Preserve "was" as baseline under the group key so it stays in the list
+            const groupEl = findCheckboxGroup(change)?.checkboxes?.[0] || null;
+            baseline.set(change.key, {
+              label: change.label,
+              type: change.type,
+              value: change.was,
+              element: groupEl
+            });
+            results.applied++;
+          } else {
+            results.failed++;
+            results.failures.push(change.label || change.key);
+          }
+        } catch (err) {
+          console.error('Failed to apply checkbox group:', change.key, err);
+          results.failed++;
+          results.failures.push(change.label || change.key);
+        }
+        continue;
+      }
+      
       const el = findFieldForChange(change);
       if (!el) {
         results.failed++;
@@ -1192,7 +1219,9 @@
         continue;
       }
       
-      // Set baseline to the "was" value so this field stays in dirty list
+      // Set baseline to the "was" value so this field stays in dirty list.
+      // getFieldKey returns name:<name> for radios (all options share the name),
+      // matching how collectFields keys the group.
       const fieldKey = getFieldKey(el);
       baseline.set(fieldKey, {
         label: change.label,
@@ -1231,6 +1260,16 @@
    * 4. Fallback to label text match
    */
   function applyOneChange(change) {
+    // Checkbox groups span multiple elements - handle specially
+    if (isCheckboxGroupChange(change)) {
+      try {
+        return applyCheckboxGroupChange(change);
+      } catch (err) {
+        console.error('Failed to apply checkbox group:', change.key, err);
+        return false;
+      }
+    }
+    
     const el = findFieldForChange(change);
     if (!el) return false;
     
@@ -1322,33 +1361,164 @@
     return null;
   }
   
+  /**
+   * Set an input/textarea value via the native property setter so that
+   * framework-controlled inputs (React, etc.) actually register the change.
+   * React patches the element's value setter and tracks the last value it set;
+   * assigning el.value directly is ignored on re-render. Calling the native
+   * prototype setter bypasses that tracker so the dispatched input event sticks.
+   */
+  function setNativeValue(el, value) {
+    const v = value == null ? '' : value;
+    try {
+      const proto = el instanceof HTMLTextAreaElement
+        ? window.HTMLTextAreaElement.prototype
+        : window.HTMLInputElement.prototype;
+      const desc = Object.getOwnPropertyDescriptor(proto, 'value');
+      if (desc && desc.set) {
+        desc.set.call(el, v);
+        return;
+      }
+    } catch {}
+    el.value = v;
+  }
+
+  /**
+   * Set a checkbox/radio checked state via the native setter (React bypass).
+   */
+  function setNativeChecked(el, checked) {
+    try {
+      const desc = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'checked');
+      if (desc && desc.set) {
+        desc.set.call(el, checked);
+        return;
+      }
+    } catch {}
+    el.checked = checked;
+  }
+
+  /**
+   * Drive a checkbox/radio to a target checked state in a way that works for
+   * native inputs AND framework-controlled custom controls (Microsoft Forms,
+   * Google Forms, React, etc.).
+   *
+   * Strategy (stop as soon as the state matches the target):
+   * 1. Real click() on the input — fires the native toggle and the framework's
+   *    onClick/onChange, which is what MS Forms/React rely on.
+   * 2. Click the associated/wrapping <label> — some UIs wire the handler there.
+   * 3. Fallback: native setter + full synthetic event sequence.
+   */
+  function applyCheckedState(el, shouldCheck) {
+    if (el.checked === shouldCheck) return true;
+
+    try { el.focus?.(); } catch {}
+    try { el.click(); } catch {}
+    if (el.checked === shouldCheck) return true;
+
+    const label = (el.id && document.querySelector(`label[for="${CSS.escape(el.id)}"]`)) || el.closest('label');
+    if (label) {
+      try { label.click(); } catch {}
+      if (el.checked === shouldCheck) return true;
+    }
+
+    setNativeChecked(el, shouldCheck);
+    el.dispatchEvent(new Event('click', { bubbles: true }));
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+    return el.checked === shouldCheck;
+  }
+
+  /**
+   * Parse a stored multi-value string ("A, B, C") into a Set of option labels.
+   * Returns an empty Set for empty/placeholder markers.
+   */
+  function parseSelectedValues(stored) {
+    const set = new Set();
+    if (!stored) return set;
+    const trimmed = String(stored).trim();
+    if (EMPTY_VALUES.has(trimmed) || trimmed === '(none)') return set;
+    for (const part of trimmed.split(',')) {
+      const t = part.trim();
+      if (t) set.add(t);
+    }
+    return set;
+  }
+
+  /**
+   * Find the container + checkboxes for a checkbox-group change.
+   * Returns { container, checkboxes } or null if the group can't be located.
+   */
+  function findCheckboxGroup(change) {
+    const prefix = 'checkbox-group:';
+    const groupLabel = (change.key && change.key.startsWith(prefix))
+      ? change.key.slice(prefix.length)
+      : change.label;
+    if (!groupLabel) return null;
+
+    const allCheckboxes = deepQueryAll(document, 'input[type="checkbox"]');
+    for (const cb of allCheckboxes) {
+      if (!cb.offsetParent) continue;
+      if (shouldSkipField(cb)) continue;
+      if (getCheckboxGroupLabel(cb) === groupLabel) {
+        const container = cb.closest('[class*="question"], [class*="Question"], [role="group"], fieldset, [class*="form-group"]');
+        if (container) {
+          const checkboxes = Array.from(container.querySelectorAll('input[type="checkbox"]'));
+          if (checkboxes.length > 0) return { container, checkboxes };
+        }
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Apply a checkbox-group (multi-select) change: check options whose label
+   * (or value) is in the stored "now" set, uncheck the rest.
+   */
+  function applyCheckboxGroupChange(change) {
+    const group = findCheckboxGroup(change);
+    if (!group) return false;
+
+    const desired = parseSelectedValues(change.now);
+    for (const cb of group.checkboxes) {
+      const optLabel = getCheckboxOptionLabel(cb);
+      const shouldCheck = desired.has(optLabel) || desired.has(cb.value);
+      applyCheckedState(cb, shouldCheck);
+    }
+    return true;
+  }
+
+  function isCheckboxGroupChange(change) {
+    return change.type === 'checkbox-group' ||
+      (typeof change.key === 'string' && change.key.startsWith('checkbox-group:'));
+  }
+
   function setFieldValue(el, value, type) {
     const tag = el.tagName.toLowerCase();
     
     if (tag === 'input') {
       if (el.type === 'checkbox') {
-        const shouldCheck = value === 'Checked' || value === true;
-        if (el.checked !== shouldCheck) {
-          el.checked = shouldCheck;
-          el.dispatchEvent(new Event('change', { bubbles: true }));
-        }
-        return true;
+        // Single checkbox: stored value is "Checked" / option label (checked) vs unchecked markers
+        const nowEmpty = isEmptyValue(value);
+        const shouldCheck = !nowEmpty && value !== 'Unchecked';
+        return applyCheckedState(el, shouldCheck);
       }
       
       if (el.type === 'radio') {
-        const radios = document.querySelectorAll(`input[name="${CSS.escape(el.name)}"]`);
+        const name = el.name;
+        const radios = name
+          ? Array.from(document.querySelectorAll(`input[type="radio"][name="${CSS.escape(name)}"]`))
+          : [el];
         for (const radio of radios) {
           const optionLabel = getRadioOptionLabel(radio);
           if (optionLabel === value || radio.value === value) {
-            radio.checked = true;
-            radio.dispatchEvent(new Event('change', { bubbles: true }));
-            return true;
+            return applyCheckedState(radio, true);
           }
         }
         return false;
       }
       
-      el.value = value || '';
+      // Text-like inputs: native setter + input/change for framework compatibility
+      setNativeValue(el, value || '');
       el.dispatchEvent(new Event('input', { bubbles: true }));
       el.dispatchEvent(new Event('change', { bubbles: true }));
       return true;
@@ -1356,19 +1526,22 @@
     
     if (tag === 'select') {
       if (el.multiple) {
-        const values = (value || '').split(', ');
+        const desired = parseSelectedValues(value);
         let anyMatched = false;
         for (const opt of el.options) {
-          const shouldSelect = values.includes(opt.text) || values.includes(opt.value);
+          const shouldSelect = desired.has(opt.text) || desired.has(opt.value) ||
+            desired.has((opt.text || '').trim());
           opt.selected = shouldSelect;
           if (shouldSelect) anyMatched = true;
         }
+        el.dispatchEvent(new Event('input', { bubbles: true }));
         el.dispatchEvent(new Event('change', { bubbles: true }));
         return anyMatched;
       } else {
         for (const opt of el.options) {
-          if (opt.text === value || opt.value === value) {
-            el.value = opt.value;
+          if (opt.text === value || opt.value === value || (opt.text || '').trim() === value) {
+            setNativeValue(el, opt.value);
+            el.dispatchEvent(new Event('input', { bubbles: true }));
             el.dispatchEvent(new Event('change', { bubbles: true }));
             return true;
           }
@@ -1378,7 +1551,7 @@
     }
     
     if (tag === 'textarea') {
-      el.value = value || '';
+      setNativeValue(el, value || '');
       el.dispatchEvent(new Event('input', { bubbles: true }));
       el.dispatchEvent(new Event('change', { bubbles: true }));
       return true;
@@ -1387,6 +1560,7 @@
     if (el.isContentEditable) {
       el.innerText = value || '';
       el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
       return true;
     }
     
