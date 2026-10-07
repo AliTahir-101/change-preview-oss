@@ -16,6 +16,7 @@ ChangePreview is a Chrome extension that snapshots form fields when you load a p
 - **Coverage meter** — Honest about what fields are being tracked
 - **Privacy-first** — All data stays local; passwords and sensitive fields are skipped
 - **Dark mode** — Follows your OS preference
+- **Discreet credit** — Side-panel footer: “Made with ♥ by NextGen Folks”, linking to the products section on nextgenfolks.com
 
 ## Installation (Load Unpacked)
 
