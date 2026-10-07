@@ -6,6 +6,16 @@ plain text with line breaks only. Copy the sections into the matching dashboard 
 
 ---
 
+## Store URLs
+
+| Field | URL |
+|-------|-----|
+| **Homepage / website URL** | https://nextgenfolks.com/ |
+| **Privacy policy URL** | https://nextgenfolks.com/privacy |
+| **Product / support page** | https://nextgenfolks.com/products/change-preview |
+
+---
+
 ## Extension name
 
 ChangePreview
@@ -64,6 +74,8 @@ Privacy:
 Your data stays on your device. ChangePreview uses local browser storage only
 (chrome.storage.local). It does not send your field values anywhere, has no accounts,
 and does no remote tracking. Passwords and sensitive fields are intentionally skipped.
+
+More about ChangePreview: https://nextgenfolks.com/products/change-preview
 
 Built by NextGen Folks. Questions or feedback? Email info@nextgenfolks.com.
 

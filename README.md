@@ -174,6 +174,10 @@ This is a Manifest V3 Chrome extension. The structure is:
     └── aspnet-checkboxlist.html # ASP.NET CheckBoxList/RadioButtonList test page
 ```
 
+## Store Listing
+
+Chrome Web Store metadata and descriptions are maintained in [`store/chrome-web-store.md`](store/chrome-web-store.md).
+
 ## License
 
 MIT
