@@ -10,6 +10,7 @@ ChangePreview is a Chrome extension that snapshots form fields when you load a p
 
 - **Side panel UI** — Shows only dirty fields with old vs new values
 - **Soft Save confirm** — Modal appears when you click Save/Submit/Update with pending changes
+- **Confirm on save toggle** — A header checkbox turns the save/submit confirmation dialog off; change detection and the side panel keep working for information only
 - **Copy Markdown / CSV** — One-click export for change documentation
 - **Coverage meter** — Honest about what fields are being tracked
 - **Privacy-first** — All data stays local; passwords and sensitive fields are skipped

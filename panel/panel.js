@@ -29,6 +29,7 @@ const elements = {
   copyCsv: document.getElementById('copyCsv'),
   downloadCsv: document.getElementById('downloadCsv'),
   persistToggle: document.getElementById('persistToggle'),
+  confirmToggle: document.getElementById('confirmToggle'),
   reapplyRow: document.getElementById('reapplyRow'),
   reapplyChanges: document.getElementById('reapplyChanges'),
   clearDetections: document.getElementById('clearDetections'),
@@ -56,6 +57,7 @@ const COLLAPSE_ICON_SVG = '<path d="M18 15l-6-6-6 6" stroke="currentColor" strok
 const LONG_VALUE_THRESHOLD = 60;
 const STORAGE_PREFIX = 'cp_detections:';
 const CLEARED_PREFIX = 'cp_cleared:';
+const CONFIRM_ON_SAVE_KEY = 'confirmOnSaveEnabled';
 
 let currentData = null;
 let persistEnabled = false;
@@ -795,6 +797,32 @@ async function clearPersistedDetections(host, path) {
   }
 }
 
+/**
+ * Load the "Confirm on save" preference. Defaults to ON so the confirmation
+ * dialog keeps appearing unless the user explicitly turned it off. The content
+ * script reads the same storage key (and watches for changes), so toggling here
+ * updates the save/submit intercept across every tab.
+ */
+async function loadConfirmOnSaveSetting() {
+  try {
+    const result = await chrome.storage.local.get(CONFIRM_ON_SAVE_KEY);
+    const enabled = result[CONFIRM_ON_SAVE_KEY] !== false;
+    elements.confirmToggle.checked = enabled;
+  } catch (err) {
+    console.error('Failed to load confirm-on-save setting:', err);
+    elements.confirmToggle.checked = true;
+  }
+}
+
+async function saveConfirmOnSaveSetting(enabled) {
+  try {
+    await chrome.storage.local.set({ [CONFIRM_ON_SAVE_KEY]: enabled });
+    showToast(enabled ? 'Confirm on save: on' : 'Confirm on save: off');
+  } catch (err) {
+    console.error('Failed to save confirm-on-save setting:', err);
+  }
+}
+
 async function loadPersistSetting() {
   try {
     const result = await chrome.storage.local.get('persistEnabled');
@@ -1109,6 +1137,10 @@ elements.confirmClear.addEventListener('click', () => {
   clearDetections();
 });
 
+elements.confirmToggle.addEventListener('change', (e) => {
+  saveConfirmOnSaveSetting(e.target.checked);
+});
+
 elements.persistToggle.addEventListener('change', (e) => {
   if (!isLicenseValid) {
     e.target.checked = false;
@@ -1360,6 +1392,7 @@ async function init() {
   
   updateFeatureGating();
   
+  await loadConfirmOnSaveSetting();
   await loadPersistSetting();
   await refreshData();
   updateReapplyVisibility();

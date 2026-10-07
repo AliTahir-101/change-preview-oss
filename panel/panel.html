@@ -86,10 +86,16 @@
           <h1 class="title">ChangePreview</h1>
           <div class="host" id="hostInfo">—</div>
         </div>
-        <label class="persist-toggle" title="Keep detections after reload">
-          <input type="checkbox" id="persistToggle">
-          <span class="persist-label">Keep after reload</span>
-        </label>
+        <div class="header-toggles">
+          <label class="header-toggle" title="Show a confirmation dialog listing changes when you save or submit a form">
+            <input type="checkbox" id="confirmToggle" checked>
+            <span class="header-toggle-label">Confirm on save</span>
+          </label>
+          <label class="header-toggle persist-toggle" title="Keep detections after reload">
+            <input type="checkbox" id="persistToggle">
+            <span class="header-toggle-label persist-label">Keep after reload</span>
+          </label>
+        </div>
       </div>
       <div class="header-meta">
         <span class="change-count" id="changeCount">0 changes</span>

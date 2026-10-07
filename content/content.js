@@ -193,6 +193,41 @@
   let saveInterceptEnabled = true;
   let modalOpen = false;
   let pendingSaveTarget = null;
+
+  /**
+   * User preference: show the save/submit confirmation dialog that lists pending
+   * changes before the form is submitted. Defaults to true so new installs keep
+   * the current "confirm on save" behaviour. When false, the dialog is never
+   * shown and submits/saves proceed normally — but change detection and the side
+   * panel keep working for information only.
+   *
+   * Persisted in chrome.storage.local under `confirmOnSaveEnabled` and kept in
+   * sync across all tabs/frames via a storage change listener.
+   */
+  let confirmOnSaveEnabled = true;
+
+  const CONFIRM_ON_SAVE_KEY = 'confirmOnSaveEnabled';
+
+  function loadConfirmOnSavePref() {
+    try {
+      chrome.storage?.local?.get(CONFIRM_ON_SAVE_KEY, (res) => {
+        if (chrome.runtime?.lastError) return;
+        // Default ON: only an explicit stored `false` disables the dialog.
+        confirmOnSaveEnabled = res?.[CONFIRM_ON_SAVE_KEY] !== false;
+      });
+    } catch {}
+  }
+
+  function setupPrefSync() {
+    try {
+      chrome.storage?.onChanged?.addListener((changes, area) => {
+        if (area !== 'local') return;
+        if (changes[CONFIRM_ON_SAVE_KEY]) {
+          confirmOnSaveEnabled = changes[CONFIRM_ON_SAVE_KEY].newValue !== false;
+        }
+      });
+    } catch {}
+  }
   
   /**
    * Timestamp when notifications were last suppressed.
@@ -1807,6 +1842,11 @@
   function handleSaveClick(e) {
     if (!saveInterceptEnabled) return;
     if (modalOpen) return;
+
+    // User turned off the confirm-on-save dialog: let the save proceed normally.
+    // Detection still runs (via input/change listeners) so the panel keeps
+    // showing changes for information only.
+    if (!confirmOnSaveEnabled) return;
     
     // Never intercept on denylisted hosts (payment/admin dashboards)
     if (isInterceptDenylisted()) return;
@@ -1901,6 +1941,10 @@
     document.addEventListener('submit', (e) => {
       if (!saveInterceptEnabled) return;
       if (modalOpen) return;
+
+      // User turned off the confirm-on-save dialog: let the submit proceed
+      // normally. Detection keeps running so the panel still lists changes.
+      if (!confirmOnSaveEnabled) return;
       
       // Never intercept on denylisted hosts (payment/admin dashboards)
       if (isInterceptDenylisted()) return;
@@ -2563,6 +2607,9 @@
     setupInputListeners();
     setupSaveIntercept();
     setupMutationObserver();
+
+    loadConfirmOnSavePref();
+    setupPrefSync();
   }
 
   /**
