@@ -1520,6 +1520,10 @@
       data: {
         host: location.hostname,
         path: location.pathname,
+        // Full top-level URL so the panel can key storage/baseline on the
+        // canonical page (origin + path + meaningful query), not host alone.
+        // Only the top frame sends this, so CDN/sub-frame URLs never leak in.
+        url: location.href,
         dirty: agg.dirty,
         // Include ALL field keys so the panel builds a STABLE fingerprint.
         // Without this, save (dirty keys only) and restore (all keys) mismatch.
@@ -2735,6 +2739,8 @@
         sendResponse({
           host: location.hostname,
           path: location.pathname,
+          // Full top-level URL for canonical page-keyed storage (see FIELDS_UPDATE).
+          url: location.href,
           dirty: agg.dirty,
           allFieldKeys: agg.allFieldKeys,
           coverage: agg.coverage
