@@ -41,6 +41,14 @@ let isShowingRestoredData = false;
 let formLooksReset = false;
 
 /**
+ * Flag set true on page load/reload, cleared when first live dirty detected.
+ * Prevents restoring from persisted after user undoes edits (vs after reload).
+ * Reapply case: justReloaded=true + no live dirty + persisted exists.
+ * Undo case: justReloaded=false + no live dirty = clean state, not Reapply.
+ */
+let justReloaded = true;
+
+/**
  * Timestamp until which Clear is in effect (short-term protection).
  */
 let clearedUntil = 0;
@@ -469,6 +477,9 @@ async function refreshData() {
       
       if (persistEnabled && liveHasChanges) {
         // Real live changes detected - this is a new edit session
+        // Mark that we've seen live changes, so we don't restore from persisted later
+        justReloaded = false;
+        
         if (pageCleared || panelClearedSession) {
           // First real edit after Clear - remove the marker, allow saving
           await removePageClearedMarker(response.host, response.path);
@@ -480,8 +491,10 @@ async function refreshData() {
         formLooksReset = false;
       }
       
-      // CRITICAL: Never restore from storage if page was cleared
-      if (persistEnabled && !liveHasChanges && !isCleared() && !pageCleared && !panelClearedSession) {
+      // RESTORE FROM PERSISTED: Only after reload, never after user undoes edits
+      // justReloaded must be true - meaning no live edits detected this session yet
+      // If user edited and then undid, justReloaded is false → clean state, not Reapply
+      if (persistEnabled && !liveHasChanges && justReloaded && !isCleared() && !pageCleared && !panelClearedSession) {
         let persisted = await loadPersistedDetections(newFingerprint);
         if (!persisted) {
           const fallback = await loadPersistedByHostPath(response.host, response.path);
@@ -508,17 +521,27 @@ async function refreshData() {
         }
       }
       
+      // Either live changes, or no persisted to restore, or user undid (justReloaded=false)
+      // When dirty is empty after undo (justReloaded=false), this is clean state
+      if (!liveHasChanges && !justReloaded) {
+        // User undid all changes - clear restored state
+        isShowingRestoredData = false;
+        formLooksReset = false;
+      }
+      
       currentFingerprint = newFingerprint;
-      isShowingRestoredData = false;
-      formLooksReset = false;
+      if (liveHasChanges) {
+        isShowingRestoredData = false;
+        formLooksReset = false;
+      }
       updateUI(response);
       updateReapplyVisibility();
     }
   } catch (err) {
     console.error('Failed to get fields:', err);
     
-    // Don't restore from storage if cleared
-    if (isCleared() || panelClearedSession) return;
+    // Don't restore from storage if cleared or not just reloaded
+    if (isCleared() || panelClearedSession || !justReloaded) return;
     
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (tab?.url && persistEnabled) {
@@ -808,6 +831,9 @@ async function clearDetections() {
     persistedData = null;
     currentData = null;
     currentFingerprint = null;
+    // After Clear, treat as if just reloaded so next page reload can restore
+    // (though storage is cleared, so nothing to restore until user edits again)
+    justReloaded = true;
     
     // Update UI to show empty state immediately
     const coverage = response?.baselineSize 
@@ -858,14 +884,32 @@ async function reapplyChanges() {
       // - Form now has "now" values
       // - getDirtyFields() will return all restored changes (now vs was baseline)
       // - Hide Reapply button since values are now applied
-      // - KEEP the detection list visible - do NOT clear to 0
+      // - Mark that we've seen edits this session (prevents Reapply on later undo)
       isShowingRestoredData = false;
       formLooksReset = false;
+      justReloaded = false;
       updateReapplyVisibility();
       
-      // Keep showing the restored changes - they're still "dirty" vs original baseline
-      // The content script has set baseline = was values, so getDirtyFields() will
-      // return the same list. Future user edits will merge into this list.
+      // CRITICAL: Refresh the table with LIVE data from content script.
+      // Without this, the table shows OLD persisted `now` values instead of live DOM values.
+      // Wait briefly for content script's suppress window to clear, then get fresh data.
+      setTimeout(async () => {
+        const freshResponse = await chrome.tabs.sendMessage(tab.id, { type: 'GET_FIELDS' });
+        if (freshResponse?.dirty?.length > 0) {
+          const fieldKeys = (freshResponse.dirty || []).map(f => f.key);
+          const allFieldKeys = freshResponse.allFieldKeys || fieldKeys;
+          currentFingerprint = createFingerprint(freshResponse.host, freshResponse.path, allFieldKeys);
+          
+          // Save fresh data to storage
+          if (persistEnabled) {
+            persistedData = { dirty: freshResponse.dirty };
+            saveDetections(freshResponse, currentFingerprint);
+          }
+          
+          updateUI(freshResponse);
+          updateReapplyVisibility();
+        }
+      }, 1200);
     }
   } catch (err) {
     console.error('Failed to reapply changes:', err);
@@ -971,6 +1015,9 @@ chrome.runtime.onMessage.addListener(async (message) => {
     
     if (hasDirtyData) {
       // Real dirty data = user made an edit
+      // Mark that we've seen live edits - prevents Reapply on later undo
+      justReloaded = false;
+      
       // If we're in cleared session, this is the first edit after Clear
       if (panelClearedSession) {
         // Remove the cleared marker, unlock saves
@@ -986,6 +1033,11 @@ chrome.runtime.onMessage.addListener(async (message) => {
         persistedData = { dirty: data.dirty };
         saveDetections(data, currentFingerprint);
       }
+    } else if (!justReloaded) {
+      // Dirty is empty AND we've seen edits this session = user undid all changes
+      // This is clean state, NOT Reapply case. Clear restored flags.
+      isShowingRestoredData = false;
+      formLooksReset = false;
     }
     
     updateUI(data);
@@ -994,12 +1046,16 @@ chrome.runtime.onMessage.addListener(async (message) => {
 });
 
 chrome.tabs.onActivated.addListener(async () => {
+  // New tab activated - treat as a fresh session for Reapply logic
+  justReloaded = true;
   await refreshData();
   await updateReapplyVisibility();
 });
 
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
   if (changeInfo.status === 'complete') {
+    // Page reloaded - reset to allow Reapply if persisted data exists
+    justReloaded = true;
     await refreshData();
     await updateReapplyVisibility();
   }
