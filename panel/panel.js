@@ -125,6 +125,52 @@ function getPageKey(source) {
   return `https://${host}${path}`;
 }
 
+function searchParamsMap(search) {
+  const p = new URLSearchParams(search.startsWith('?') ? search.slice(1) : search);
+  const map = {};
+  for (const [k, v] of p.entries()) {
+    if (!map[k]) map[k] = [];
+    map[k].push(v);
+  }
+  return map;
+}
+
+function paramsAreSubset(small, large) {
+  for (const [k, vals] of Object.entries(small)) {
+    if (!large[k]) return false;
+    for (const v of vals) {
+      if (!large[k].includes(v)) return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * True when two canonical page keys are the same logical form page.
+ *
+ * Same origin + pathname (trailing slash already normalized by canonicalize).
+ * Queries: identical, or one is a subset of the other — so a URL that settles
+ * after load (`/prefs` → `/prefs?tab=1`) still hits the Keep snapshot, while
+ * `?formId=1` vs `?formId=2` stay separate.
+ */
+function sameLogicalPage(a, b) {
+  if (!a || !b) return false;
+  if (a === b) return true;
+  try {
+    const ua = new URL(a);
+    const ub = new URL(b);
+    if (ua.origin !== ub.origin) return false;
+    const pa = (ua.pathname || '/').replace(/\/+$/, '') || '/';
+    const pb = (ub.pathname || '/').replace(/\/+$/, '') || '/';
+    if (pa !== pb) return false;
+    const qa = searchParamsMap(ua.search);
+    const qb = searchParamsMap(ub.search);
+    return paramsAreSubset(qa, qb) || paramsAreSubset(qb, qa);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Strip the ephemeral `frame:<uid>:` prefix. Iframe remounts mint a new UID, so
  * Keep/restore must identity fields without it or the same change stacks as
@@ -175,9 +221,10 @@ function isDetectionKeyForPage(key, value, pageKey) {
   if (key === canon || key.startsWith(`${canon}#`)) return true;
   const hp = pageKeyHostPath(pageKey);
   if (!hp) return false;
+  if (value?.pageKey && sameLogicalPage(value.pageKey, pageKey)) return true;
   const valueHost = value?.host || '';
   const valuePath = (value?.path || '/').replace(/\/+$/, '') || '/';
-  if (valueHost === hp.host && valuePath === hp.path) return true;
+  if (valueHost && sameLogicalPage(`https://${valueHost}${valuePath}`, pageKey)) return true;
   const legacyPrefix = STORAGE_PREFIX + hp.host + hp.path;
   return key === legacyPrefix || key.startsWith(`${legacyPrefix}#`);
 }
@@ -200,6 +247,14 @@ let currentFingerprint = null;
 let persistedData = null;
 let isShowingRestoredData = false;
 let formLooksReset = false;
+
+/**
+ * Sticky Keep restore: { tabId, pageKey }. While this is set, live scans
+ * (snapshot, mutation, hydration, 2s poll) must not replace or clear the
+ * restored rows. Only a trusted user-input push, Clear, Keep-off, or a real
+ * navigation to a different logical page ends it.
+ */
+let restoredKeep = null;
 
 /**
  * Flag set true on page load/reload, cleared when first live dirty detected.
@@ -423,6 +478,39 @@ function showToast(message) {
   setTimeout(() => {
     elements.toast.classList.remove('visible');
   }, 2000);
+}
+
+function endKeepRestore() {
+  restoredKeep = null;
+  isShowingRestoredData = false;
+  formLooksReset = false;
+}
+
+function keepRestoreHolds(tabId, pageKey) {
+  return !!(
+    persistEnabled &&
+    isShowingRestoredData &&
+    restoredKeep &&
+    restoredKeep.tabId === tabId &&
+    sameLogicalPage(restoredKeep.pageKey, pageKey)
+  );
+}
+
+function beginKeepRestore(tabId, pageKey, persisted, host, path, coverage) {
+  restoredKeep = { tabId, pageKey };
+  persistedData = persisted;
+  currentFingerprint = persisted.fingerprint || currentFingerprint;
+  isShowingRestoredData = true;
+  formLooksReset = true;
+  justReloaded = true;
+  updateUI({
+    host: host || persisted.host || '—',
+    path: path || persisted.path || '',
+    dirty: persisted.dirty,
+    coverage: coverage || { tracked: 0, total: 0, skipped: 0 },
+    fromPersisted: true
+  });
+  updateReapplyVisibility();
 }
 
 function updateUI(data) {
@@ -703,13 +791,33 @@ async function refreshData(explicitTabId) {
     if (response) {
       const fieldKeys = (response.dirty || []).map(f => f.key);
       const allFieldKeys = response.allFieldKeys || fieldKeys;
-      const pageKey = getPageKey(response);
+      const pageKey = getPageKey(response) || getPageKey({ url: tab.url });
       const newFingerprint = createFingerprint(pageKey, allFieldKeys);
       
       const liveHasChanges = response.dirty?.length > 0;
+
+      // Durable Keep: a live SCAN on the same logical page must not replace
+      // the restored snapshot (hydration dirty or empty baseline after reload).
+      if (keepRestoreHolds(tabId, pageKey)) {
+        return;
+      }
+      if (restoredKeep && restoredKeep.tabId === tabId && pageKey
+          && !sameLogicalPage(restoredKeep.pageKey, pageKey)) {
+        endKeepRestore();
+      }
       
       // Check for persistent cleared marker - NEVER restore if page was cleared
       const pageCleared = await hasPageClearedMarker(pageKey);
+
+      // After reload (or tab bind), Keep snapshot wins over any live scan —
+      // including a hydration scan that looks dirty for 1–2s then goes empty.
+      if (persistEnabled && justReloaded && !isCleared() && !pageCleared && !panelClearedSession) {
+        const fallback = await loadPersistedByPageKey(pageKey);
+        if (fallback?.data?.dirty?.length > 0) {
+          beginKeepRestore(tabId, pageKey, fallback.data, response.host, response.path, response.coverage);
+          return;
+        }
+      }
       
       if (persistEnabled && liveHasChanges) {
         // Real live changes detected - this is a new edit session
@@ -723,51 +831,19 @@ async function refreshData(explicitTabId) {
         currentFingerprint = newFingerprint;
         await saveDetections(response, currentFingerprint);
         persistedData = { dirty: response.dirty, fingerprint: currentFingerprint };
-        isShowingRestoredData = false;
-        formLooksReset = false;
-      }
-      
-      // RESTORE FROM PERSISTED: Only after reload, never after user undoes edits
-      // justReloaded must be true - meaning no live edits detected this session yet
-      // If user edited and then undid, justReloaded is false → clean state, not Reapply
-      if (persistEnabled && !liveHasChanges && justReloaded && !isCleared() && !pageCleared && !panelClearedSession) {
-        // Always load by canonical pageKey (not the field-hash fingerprint). The
-        // hash used to change whenever an iframe remounted, which left several
-        // snapshots for one form; loading by pageKey + picking newest +
-        // collapsing siblings is idempotent.
-        const fallback = await loadPersistedByPageKey(pageKey);
-        const persisted = fallback?.data;
-        
-        if (persisted?.dirty?.length > 0) {
-          persistedData = persisted;
-          currentFingerprint = persisted.fingerprint || newFingerprint;
-          isShowingRestoredData = true;
-          formLooksReset = true;
-          
-          updateUI({
-            host: response.host,
-            path: response.path,
-            dirty: persisted.dirty,
-            coverage: response.coverage,
-            fromPersisted: true
-          });
-          updateReapplyVisibility();
-          return;
-        }
+        endKeepRestore();
       }
       
       // Either live changes, or no persisted to restore, or user undid (justReloaded=false)
       // When dirty is empty after undo (justReloaded=false), this is clean state
       if (!liveHasChanges && !justReloaded) {
         // User undid all changes - clear restored state
-        isShowingRestoredData = false;
-        formLooksReset = false;
+        endKeepRestore();
       }
       
       currentFingerprint = newFingerprint;
       if (liveHasChanges) {
-        isShowingRestoredData = false;
-        formLooksReset = false;
+        endKeepRestore();
       }
       updateUI(response);
       updateReapplyVisibility();
@@ -782,6 +858,10 @@ async function refreshData(explicitTabId) {
       console.error('Failed to get fields:', err);
     }
     
+    // Don't clobber a Keep snapshot that's already on screen for this tab
+    // (content script not injected yet is expected during reload).
+    if (restoredKeep && restoredKeep.tabId === tabId) return;
+
     // Don't restore from storage if cleared or not just reloaded
     if (isCleared() || panelClearedSession || !justReloaded) return;
     
@@ -798,26 +878,15 @@ async function refreshData(explicitTabId) {
         
         const fallback = await loadPersistedByPageKey(pageKey);
         if (fallback?.data?.dirty?.length > 0) {
-          persistedData = fallback.data;
-          currentFingerprint = fallback.data.fingerprint;
-          isShowingRestoredData = true;
-          formLooksReset = true;
-          
-          updateUI({
-            host: url.host,
-            path: url.pathname,
-            dirty: persistedData.dirty,
-            coverage: { tracked: 0, total: 0, skipped: 0 },
-            fromPersisted: true
+          beginKeepRestore(tabId, pageKey, fallback.data, url.host, url.pathname, {
+            tracked: 0, total: 0, skipped: 0
           });
-          updateReapplyVisibility();
           return;
         }
       } catch (urlErr) {}
     }
     
-    isShowingRestoredData = false;
-    formLooksReset = false;
+    endKeepRestore();
     updateUI({
       host: '—',
       path: '',
@@ -1071,8 +1140,7 @@ async function savePersistSetting(enabled) {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
       const pageKey = tab?.url ? getPageKey({ url: tab.url }) : null;
       await clearPersistedDetections(pageKey);
-      isShowingRestoredData = false;
-      formLooksReset = false;
+      endKeepRestore();
       updateReapplyVisibility();
     }
   } catch (err) {
@@ -1131,8 +1199,7 @@ async function clearDetections() {
     const response = await chrome.tabs.sendMessage(tab.id, { type: 'CLEAR_BASELINE' });
     
     // Reset all panel state
-    isShowingRestoredData = false;
-    formLooksReset = false;
+    endKeepRestore();
     persistedData = null;
     currentData = null;
     currentFingerprint = null;
@@ -1194,8 +1261,7 @@ async function reapplyChanges() {
       // - getDirtyFields() will return all restored changes (now vs was baseline)
       // - Hide Reapply button since values are now applied
       // - Mark that we've seen edits this session (prevents Reapply on later undo)
-      isShowingRestoredData = false;
-      formLooksReset = false;
+      endKeepRestore();
       justReloaded = false;
       updateReapplyVisibility();
       
@@ -1374,6 +1440,7 @@ chrome.runtime.onMessage.addListener(async (message, sender) => {
 
     const data = message.data;
     const hasDirtyData = data.dirty?.length > 0;
+    const trigger = data.trigger === 'user-input' ? 'user-input' : 'scan';
     
     // During the short-term cleared window (5s), only accept updates with real dirty data
     // This blocks stale empty updates but allows real new edits through
@@ -1385,8 +1452,29 @@ chrome.runtime.onMessage.addListener(async (message, sender) => {
     const allFieldKeys = data.allFieldKeys || fieldKeys;
     const pageKey = getPageKey(data);
     currentFingerprint = createFingerprint(pageKey, allFieldKeys);
+
+    if (keepRestoreHolds(sender.tab.id, pageKey) && trigger !== 'user-input') {
+      // Keep snapshot is on screen for this page. Ignore scan/hydration/empty
+      // baseline pushes so they cannot flash-then-clear the restored rows.
+      return;
+    }
+    if (restoredKeep && restoredKeep.tabId === sender.tab.id && pageKey
+        && !sameLogicalPage(restoredKeep.pageKey, pageKey)) {
+      endKeepRestore();
+      justReloaded = true;
+    }
     
     if (hasDirtyData) {
+      // Scan dirty during the reload window is hydration, not a new session —
+      // prefer the Keep snapshot when one exists.
+      if (trigger !== 'user-input' && persistEnabled && justReloaded) {
+        const fallback = await loadPersistedByPageKey(pageKey);
+        if (fallback?.data?.dirty?.length > 0) {
+          beginKeepRestore(sender.tab.id, pageKey, fallback.data, data.host, data.path, data.coverage);
+          return;
+        }
+      }
+
       // Real dirty data = user made an edit
       // Mark that we've seen live edits - prevents Reapply on later undo
       justReloaded = false;
@@ -1398,8 +1486,7 @@ chrome.runtime.onMessage.addListener(async (message, sender) => {
         // panelClearedSession is now false (set by removePageClearedMarker)
       }
       
-      isShowingRestoredData = false;
-      formLooksReset = false;
+      endKeepRestore();
       
       // Save to storage if persist is ON (panelClearedSession was just reset above)
       if (persistEnabled) {
@@ -1438,6 +1525,9 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
   // Rebind the panel to the newly active tab BEFORE anything else so late pushes
   // from the previous tab are rejected by the FIELDS_UPDATE guard immediately.
   activeTabId = activeInfo.tabId;
+  if (restoredKeep && restoredKeep.tabId !== activeInfo.tabId) {
+    endKeepRestore();
+  }
   // New tab activated - treat as a fresh session for Reapply logic
   justReloaded = true;
   // Bind to the exact activated tab (not a currentWindow query) so the host +
@@ -1456,6 +1546,9 @@ if (chrome.windows?.onFocusChanged) {
       const [tab] = await chrome.tabs.query({ active: true, windowId });
       if (!tab?.id) return;
       activeTabId = tab.id;
+      if (restoredKeep && restoredKeep.tabId !== tab.id) {
+        endKeepRestore();
+      }
       justReloaded = true;
       await refreshData(tab.id);
       await updateReapplyVisibility();
@@ -1657,10 +1750,19 @@ if (typeof window !== 'undefined' && window.__CHANGEPREVIEW_TEST__) {
     isTrackingParam,
     logicalFieldKey,
     dedupeDirtyFields,
+    sameLogicalPage,
     getCanonicalStorageKey,
     isDetectionKeyForPage,
     saveDetections,
     loadPersistedByPageKey,
+    keepRestoreHolds,
+    beginKeepRestore,
+    endKeepRestore,
+    getRestoredKeep: () => restoredKeep,
+    isShowingRestored: () => isShowingRestoredData,
+    setJustReloaded(v) { justReloaded = !!v; },
+    setActiveTabId(id) { activeTabId = id; },
+    refreshData,
     setPersistEnabled(enabled) { persistEnabled = !!enabled; },
     getPersistedData() { return persistedData; },
   };
