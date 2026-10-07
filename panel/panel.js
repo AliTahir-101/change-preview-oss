@@ -46,6 +46,7 @@ const elements = {
   activateBtn: document.getElementById('activateBtn'),
   unlockError: document.getElementById('unlockError'),
   sellerName: document.getElementById('sellerName'),
+  sellerLink: document.getElementById('sellerLink'),
   supportLink: document.getElementById('supportLink'),
   privacyLink: document.getElementById('privacyLink'),
 };
@@ -1585,6 +1586,9 @@ function showUnlockScreen() {
   const info = getUnlockInfo();
   elements.unlockPrice.textContent = info.price;
   elements.sellerName.textContent = info.seller;
+  if (elements.sellerLink && info.publisherUrl) {
+    elements.sellerLink.href = info.publisherUrl;
+  }
   elements.supportLink.href = `mailto:${info.supportEmail}`;
   elements.privacyLink.href = info.privacyUrl;
 }
