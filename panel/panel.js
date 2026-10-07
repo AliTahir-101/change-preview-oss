@@ -61,6 +61,18 @@ const CONFIRM_ON_SAVE_KEY = 'confirmOnSaveEnabled';
 
 let currentData = null;
 let persistEnabled = false;
+
+/**
+ * Id of the tab the panel is currently bound to (the active tab in this window).
+ *
+ * Content scripts broadcast FIELDS_UPDATE via chrome.runtime.sendMessage, which
+ * every tab's content script (foreground AND background) can emit — e.g. a
+ * background Gmail tab whose iframes heartbeat. Without this guard the panel
+ * would apply whichever tab pushed last, making the displayed host/detections
+ * oscillate between tabs. We only accept pushes whose sender.tab.id matches this
+ * value, so the panel always reflects the active tab alone.
+ */
+let activeTabId = null;
 let currentFingerprint = null;
 let persistedData = null;
 let isShowingRestoredData = false;
@@ -512,6 +524,7 @@ async function refreshData() {
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab?.id) return;
+    activeTabId = tab.id;
     
     const response = await chrome.tabs.sendMessage(tab.id, { type: 'GET_FIELDS' });
     if (response) {
@@ -1159,8 +1172,18 @@ elements.reapplyChanges.addEventListener('click', () => {
   reapplyChanges();
 });
 
-chrome.runtime.onMessage.addListener(async (message) => {
+chrome.runtime.onMessage.addListener(async (message, sender) => {
   if (message.type === 'FIELDS_UPDATE') {
+    // Bind the panel to the active tab only. FIELDS_UPDATE is a runtime broadcast
+    // that any tab's content script can emit, so ignore pushes from other tabs
+    // (e.g. a background Gmail tab) — otherwise they clobber the active tab's
+    // identity and detections, causing the host/field list to flicker on switch.
+    // If we don't yet know the active tab, drop the push; the 2s poll and
+    // onActivated/onUpdated handlers will pull the correct state.
+    if (!sender?.tab || activeTabId === null || sender.tab.id !== activeTabId) {
+      return;
+    }
+
     const data = message.data;
     const hasDirtyData = data.dirty?.length > 0;
     
@@ -1222,7 +1245,10 @@ chrome.runtime.onMessage.addListener(async (message) => {
   }
 });
 
-chrome.tabs.onActivated.addListener(async () => {
+chrome.tabs.onActivated.addListener(async (activeInfo) => {
+  // Rebind the panel to the newly active tab BEFORE anything else so late pushes
+  // from the previous tab are rejected by the FIELDS_UPDATE guard immediately.
+  activeTabId = activeInfo.tabId;
   // New tab activated - treat as a fresh session for Reapply logic
   justReloaded = true;
   await refreshData();
@@ -1230,6 +1256,10 @@ chrome.tabs.onActivated.addListener(async () => {
 });
 
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
+  // Only react to navigation of the tab the panel is bound to. A background tab
+  // (e.g. Gmail) reloading must not reset the active tab's session state or pull
+  // a refresh for it, which contributed to the cross-tab flicker.
+  if (activeTabId !== null && tabId !== activeTabId) return;
   // Set justReloaded as EARLY as possible (on 'loading') so the periodic
   // refreshData interval can't race ahead and show empty during a reload.
   // This is the signal that the page navigated/reloaded = form will be reset,
@@ -1394,9 +1424,22 @@ async function init() {
   
   await loadConfirmOnSaveSetting();
   await loadPersistSetting();
+
+  // Resolve the active tab up front so the FIELDS_UPDATE guard has a target even
+  // if refreshData() takes an early return (e.g. during a cleared window).
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tab?.id) activeTabId = tab.id;
+  } catch {}
+
   await refreshData();
   updateReapplyVisibility();
 }
 
-init();
-setInterval(refreshData, 2000);
+// Skip auto-bootstrapping under the jsdom test harness so a test can drive the
+// captured message/tab listeners deterministically. The flag is never set in the
+// real extension, so production behavior is unchanged.
+if (!(typeof window !== 'undefined' && window.__CHANGEPREVIEW_TEST__)) {
+  init();
+  setInterval(refreshData, 2000);
+}
