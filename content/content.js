@@ -569,6 +569,9 @@
    * its own option label and Checked/Unchecked value.
    */
   function getCheckboxGroupInputs(el) {
+    // ASP.NET CheckBoxList items are independent per-box rows, never a single
+    // comma-joined multi-select group, even inside a Bootstrap form-group.
+    if (isAspNetListItem(el)) return null;
     let cur = el.parentElement;
     while (cur && cur !== document.body && cur.nodeType === 1) {
       if (cur.matches && cur.matches(QUESTION_ROOT_SELECTOR)) {
@@ -599,6 +602,8 @@
     // Fallbacks: legacy recognised paths.
     if (!label) label = getLegendOrFieldsetLabel(firstRadio);
     if (!label) label = getQuestionContainerLabel(firstRadio);
+    // ASP.NET RadioButtonList: section heading label whose `for` -> list id.
+    if (!label) label = getSectionHeadingLabel(firstRadio);
 
     if (label) {
       if (name) radioGroupLabels.set(name, label);
@@ -620,7 +625,175 @@
     if (!label) label = getQuestionContainerLabel(el);
     return label || null;
   }
-  
+
+  /**
+   * Extract clean visible text from a <label>-like element: strip nested form
+   * controls and convert <br> to spaces (so multi-line / machine-translated
+   * headings do not glue words together), then collapse whitespace.
+   */
+  function extractLabelText(labelEl) {
+    if (!labelEl) return '';
+    const clone = labelEl.cloneNode(true);
+    clone.querySelectorAll('input, select, textarea, [type="hidden"]').forEach(c => c.remove());
+    clone.querySelectorAll('br').forEach(br => {
+      br.replaceWith(labelEl.ownerDocument.createTextNode(' '));
+    });
+    return clone.textContent.replace(/\s+/g, ' ').trim();
+  }
+
+  /**
+   * True when a <label> is really an OPTION's label (its `for` targets a
+   * checkbox/radio, or it wraps an input) — such a label is never a section
+   * heading and must be rejected when hunting for the question title.
+   */
+  function isOptionInputLabel(labelEl) {
+    if (!labelEl) return false;
+    const forId = labelEl.getAttribute && labelEl.getAttribute('for');
+    if (forId) {
+      const target = labelEl.ownerDocument.getElementById(forId);
+      if (target && (target.type === 'checkbox' || target.type === 'radio')) return true;
+    }
+    if (labelEl.querySelector && labelEl.querySelector('input, select, textarea')) return true;
+    return false;
+  }
+
+  /**
+   * Does this element look like a WebForms / admin "form group" block that
+   * wraps ONE question (its heading plus the list of options)? Purely
+   * structural / class-name heuristics — no site, product, or language names.
+   */
+  const SECTION_CONTAINER_ID = /divcontainer|formgroup|form-group|field-?container|question/i;
+  const SECTION_CONTAINER_CLASS = /\b(form-group|form-row|control-group|field-container|fieldcontainer|col-(?:xs|sm|md|lg|xl)-\d+)\b/i;
+  function isSectionContainer(elm) {
+    if (!elm || elm.nodeType !== 1) return false;
+    if (elm.id && SECTION_CONTAINER_ID.test(elm.id)) return true;
+    const cls = (elm.getAttribute && elm.getAttribute('class')) || '';
+    return SECTION_CONTAINER_CLASS.test(cls);
+  }
+
+  /**
+   * Resolve the SECTION heading for an independent checkbox / radio rendered by
+   * an ASP.NET WebForms CheckBoxList / RadioButtonList (or a similar admin UI).
+   *
+   * Portable, structure-only heuristics (never keyed on site names or language):
+   *   1. A <label for="<listId>"> whose `for` points at the enclosing list
+   *      container (<table>/<ul>/role=list/radiogroup) id, or at the option id
+   *      with its trailing "_<index>" removed, or at any ancestor id. The
+   *      label's `for` targeting the LIST (not an individual option) is the
+   *      defining CheckBoxList/RadioButtonList signature.
+   *   2. Otherwise, climb to the nearest form-group-like container and read its
+   *      heading label (h1-h6 > label / label.control-label / legend / h1-h6).
+   */
+  function getSectionHeadingLabel(el) {
+    const doc = el.ownerDocument || document;
+
+    // --- 1. label[for] pointing at the list container / stripped option id ---
+    const candidateIds = [];
+    const pushId = (id) => { if (id) candidateIds.push(id); };
+
+    const listContainer = el.closest('table, ul, ol, [role="list"], [role="radiogroup"], [role="group"]');
+    if (listContainer) pushId(listContainer.id);
+    if (el.id) {
+      const m = el.id.match(/^(.*?)_\d+$/);
+      if (m && m[1]) pushId(m[1]);
+    }
+    let anc = el.parentElement;
+    let ancDepth = 0;
+    while (anc && anc.nodeType === 1 && anc !== document.body && ancDepth < 6) {
+      pushId(anc.id);
+      anc = anc.parentElement;
+      ancDepth++;
+    }
+
+    const seen = new Set();
+    for (const id of candidateIds) {
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      let labelEl = null;
+      try {
+        labelEl = doc.querySelector(`label[for="${CSS.escape(id)}"]`);
+      } catch { labelEl = null; }
+      if (!labelEl || isOptionInputLabel(labelEl)) continue;
+      const text = extractLabelText(labelEl);
+      if (isValidLabelText(text)) return text;
+    }
+
+    // --- 2. nearest form-group-like container's heading label ----------------
+    let cur = el.parentElement;
+    let depth = 0;
+    while (cur && cur !== document.body && cur.nodeType === 1 && depth < 8) {
+      if (isSectionContainer(cur)) {
+        const headingLabel = cur.querySelector(
+          'h1 label, h2 label, h3 label, h4 label, h5 label, h6 label, legend, label.control-label'
+        );
+        if (headingLabel && !isOptionInputLabel(headingLabel)) {
+          const text = extractLabelText(headingLabel);
+          if (isValidLabelText(text)) return text;
+        }
+        const heading = cur.querySelector('h1, h2, h3, h4, h5, h6');
+        if (heading) {
+          const htext = heading.textContent.replace(/\s+/g, ' ').trim();
+          if (isValidLabelText(htext)) return htext;
+        }
+      }
+      cur = cur.parentElement;
+      depth++;
+    }
+
+    return null;
+  }
+
+  /**
+   * True when a checkbox/radio is an item of an ASP.NET WebForms-style
+   * CheckBoxList / RadioButtonList: the defining signal is a <label for="<id>">
+   * whose `for` targets the ENCLOSING LIST container (<table>/<ul>/role=list…)
+   * or the option id with its trailing "_<index>" removed — i.e. the section
+   * label points at the LIST, not at an individual option input.
+   *
+   * Used to keep such checkboxes as independent per-box rows instead of folding
+   * them into a single comma-joined multi-select group. Genuine MS Forms /
+   * admin multi-select groups (whose section label has no `for`, or wraps the
+   * options) are NOT matched here, so their grouped behaviour is preserved.
+   */
+  function isAspNetListItem(el) {
+    if (!el || (el.type !== 'checkbox' && el.type !== 'radio')) return false;
+    const doc = el.ownerDocument || document;
+    const ids = [];
+    const listContainer = el.closest('table, ul, ol, [role="list"], [role="radiogroup"], [role="group"]');
+    if (listContainer && listContainer.id) ids.push(listContainer.id);
+    if (el.id) {
+      const m = el.id.match(/^(.*?)_\d+$/);
+      if (m && m[1]) ids.push(m[1]);
+    }
+    for (const id of ids) {
+      if (!id) continue;
+      let lab = null;
+      try { lab = doc.querySelector(`label[for="${CSS.escape(id)}"]`); } catch { lab = null; }
+      if (!lab || isOptionInputLabel(lab)) continue;
+      if (isValidLabelText(extractLabelText(lab))) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Field label for an INDEPENDENT checkbox (an ASP.NET CheckBoxList item, where
+   * each box has its own unique name and is tracked as its own row). When a
+   * section heading is found, combine it with the option text as
+   * "Section · Option"; otherwise return null so the caller keeps option-only.
+   */
+  const SECTION_OPTION_SEPARATOR = ' \u00B7 ';
+  function getIndependentChoiceFieldLabel(el, optionText) {
+    const section = getSectionHeadingLabel(el);
+    if (!section) return null;
+    const sectionClean = cleanLabel(section);
+    if (!sectionClean) return null;
+    const option = cleanLabel(optionText || '');
+    if (!option || sectionClean.toLowerCase() === option.toLowerCase()) {
+      return sectionClean;
+    }
+    return `${sectionClean}${SECTION_OPTION_SEPARATOR}${option}`;
+  }
+
   function getAssociatedLabelText(el) {
     if (el.id) {
       const labelEl = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
@@ -733,6 +906,9 @@
     if (el.type === 'checkbox' && !isForGroup) {
       label = getCheckboxGroupLabel(el);
       if (label) return cleanLabel(label);
+      // Independent checkbox (ASP.NET CheckBoxList item): "Section · Option".
+      const combined = getIndependentChoiceFieldLabel(el, getCheckboxOptionLabel(el));
+      if (combined) return combined;
     }
     
     label = getQuestionContainerLabel(el);
@@ -2195,6 +2371,8 @@
       stripLeadingOrdinal,
       getRadioGroupLabel,
       getCheckboxGroupLabel,
+      getSectionHeadingLabel,
+      isAspNetListItem,
       getBaseline: () => baseline
     };
   }
