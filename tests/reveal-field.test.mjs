@@ -175,6 +175,90 @@ console.log('\nrevealFieldLocal re-resolves a re-rendered element');
 }
 
 /* ------------------------------------------------------------------ */
+console.log('\nchoice groups: reveal targets the SELECTED option, not a sibling');
+{
+  // MS-Forms-style nameless radios inside a question root, option B selected.
+  const { document, internals } = loadHarness(
+    '<!DOCTYPE html><body>' +
+    '<div role="radiogroup" class="office-form-question">' +
+    '<div class="question-title">Pick one</div>' +
+    '<label class="choice"><input type="radio" value="A">Option A</label>' +
+    '<label class="choice"><input type="radio" value="B" checked>Option B</label>' +
+    '<label class="choice"><input type="radio" value="C">Option C</label>' +
+    '</div></body>'
+  );
+  internals.snapshotBaseline();
+
+  // Find the single radio-group baseline key.
+  const keys = Array.from(internals.getBaseline().keys());
+  const radioKey = keys.find((k) => k.startsWith('radio-group:') || k.startsWith('name:'));
+  check('radio group collapses to a single baseline row', !!radioKey, `keys: ${keys.join(', ')}`);
+
+  const radioA = document.querySelector('input[value="A"]');
+  const radioB = document.querySelector('input[value="B"]');
+  const target = internals.resolveRevealTarget(radioKey);
+  check('radio reveal targets the checked option (B), not the first (A)',
+    target && target.contains(radioB) && !target.contains(radioA),
+    target && target.outerHTML);
+  check('radio reveal target carries the selected option text',
+    target && /Option B/.test(target.textContent), target && target.textContent);
+}
+
+{
+  // Checkbox group with exactly one box checked → that option.
+  const { document, internals } = loadHarness(
+    '<!DOCTYPE html><body>' +
+    '<div role="group" class="office-form-question">' +
+    '<div class="question-title">Pick some</div>' +
+    '<label class="choice"><input type="checkbox" value="A">Alpha</label>' +
+    '<label class="choice"><input type="checkbox" value="B" checked>Bravo</label>' +
+    '<label class="choice"><input type="checkbox" value="C">Charlie</label>' +
+    '</div></body>'
+  );
+  internals.snapshotBaseline();
+  const key = Array.from(internals.getBaseline().keys()).find((k) => k.startsWith('checkbox-group:'));
+  check('checkbox group collapses to a single baseline row', !!key);
+
+  const cbA = document.querySelector('input[value="A"]');
+  const cbB = document.querySelector('input[value="B"]');
+  const target = internals.resolveRevealTarget(key);
+  check('checkbox reveal targets the one checked option (B), not the first (A)',
+    target && target.contains(cbB) && !target.contains(cbA), target && target.outerHTML);
+}
+
+{
+  // Checkbox group with MULTIPLE checked → frame the whole question root.
+  const { document, internals } = loadHarness(
+    '<!DOCTYPE html><body>' +
+    '<div role="group" class="office-form-question" id="qroot">' +
+    '<div class="question-title">Pick some</div>' +
+    '<label class="choice"><input type="checkbox" value="A" checked>Alpha</label>' +
+    '<label class="choice"><input type="checkbox" value="B" checked>Bravo</label>' +
+    '<label class="choice"><input type="checkbox" value="C">Charlie</label>' +
+    '</div></body>'
+  );
+  internals.snapshotBaseline();
+  const key = Array.from(internals.getBaseline().keys()).find((k) => k.startsWith('checkbox-group:'));
+  const cbA = document.querySelector('input[value="A"]');
+  const cbB = document.querySelector('input[value="B"]');
+  const target = internals.resolveRevealTarget(key);
+  check('multi-checked checkbox reveal frames the whole question (all options)',
+    target && target.contains(cbA) && target.contains(cbB),
+    target && (target.id || target.className));
+}
+
+{
+  // Regression: a plain text input still resolves to the control itself.
+  const { document, internals } = loadHarness(
+    '<!DOCTYPE html><body><form><input name="email" value="x"></form></body>'
+  );
+  internals.snapshotBaseline();
+  const el = document.querySelector('input[name="email"]');
+  check('text input reveal still targets the input itself',
+    internals.resolveRevealTarget('name:email') === el);
+}
+
+/* ------------------------------------------------------------------ */
 console.log('');
 if (failed === 0) {
   console.log(`All ${passed} checks passed.`);
