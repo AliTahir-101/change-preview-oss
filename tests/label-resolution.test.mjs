@@ -129,6 +129,32 @@ console.log('\nms-forms-like.html');
   eq('radio: fill-in-blank strips type+points', fill?.label, 'He goes ....................every month.');
   eq('radio: fill-in-blank value', fill?.value, 'shopping');
 
+  // --- Ali retest: MCQ item number glued to the question text -------
+  // "3He goes ..." must drop the leading index and show the clean stem only.
+  const numbered = fieldByKey(fields, 'name:fill_in_blank_numbered');
+  eq('radio: glued ordinal stripped from title',
+    numbered?.label, 'He goes ....................every month.');
+  check('radio: glued ordinal title has no leading digit',
+    !/^\d/.test(String(numbered?.label)), `label was ${JSON.stringify(numbered?.label)}`);
+  eq('radio: glued-ordinal field value is option text', numbered?.value, 'shopping');
+
+  // Leading-ordinal stripping must NOT eat real content that starts with a
+  // number (digits + space + word, or a decimal).
+  eq('ordinal: keeps "3 days a week ..."',
+    internals.cleanLabel('3 days a week is enough'), '3 days a week is enough');
+  eq('ordinal: keeps decimals like "3.5 miles ..."',
+    internals.cleanLabel('3.5 miles to the station'), '3.5 miles to the station');
+  eq('ordinal: keeps ordinal words like "3rd floor"',
+    internals.cleanLabel('3rd floor meeting room'), '3rd floor meeting room');
+  eq('ordinal: strips "3. " prefix',
+    internals.cleanLabel('3. He goes to school'), 'He goes to school');
+  eq('ordinal: strips "3) " prefix',
+    internals.cleanLabel('3) He goes to school'), 'He goes to school');
+  eq('ordinal: strips "Q3 " prefix',
+    internals.cleanLabel('Q3 He goes to school'), 'He goes to school');
+  eq('ordinal: strips "Question 3 " prefix',
+    internals.cleanLabel('Question 3 He goes to school'), 'He goes to school');
+
   const klass = fieldByKey(fields, 'name:class_selection');
   eq('radio: class label', klass?.label, 'Which class are you in?');
   eq('radio: class value is option text', klass?.value, 'Three by one');

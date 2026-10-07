@@ -198,12 +198,61 @@
     return cleaned;
   }
   
+  /**
+   * Strip a leading question/ordinal index that Microsoft Forms (and similar
+   * builders) sometimes glue onto the front of a question title — the MCQ item
+   * number rendered immediately before the real stem, e.g. the 3rd question
+   * "He goes ....................every month." surfacing as
+   * "3He goes ....................every month.".
+   *
+   * Handles, in order:
+   *   - "Question 3" / "Question 3." / "Question 3:" / "Question 3)" prefixes
+   *   - "Q3" / "Q3." / "Q3)" / "Q3:" prefixes
+   *   - "3." / "3)" / "3]" / "3:" ordinals (with or without a trailing space)
+   *   - "3He goes" — digits glued directly onto the real title
+   *
+   * Deliberately conservative so it never eats real content that merely starts
+   * with a number:
+   *   - a bare "3 days a week ..." (digits + space + word, no ordinal separator)
+   *     is left untouched,
+   *   - decimals like "3.5 miles" are not treated as an ordinal, and
+   *   - glued digits are only stripped when the next char is an UPPER-case
+   *     letter, so ordinal/unit words like "3rd floor" or "3km" survive.
+   */
+  function stripLeadingOrdinal(text) {
+    if (!text) return text;
+    const original = text;
+    const cleaned = text.replace(/^\s+/, '');
+
+    const patterns = [
+      // "Question 3" + optional separator + required space before the title.
+      /^question\s*\d+\s*[.):\]\-–—]?\s+(?=\S)(.+)$/i,
+      // "Q3" + optional separator + required space before the title.
+      /^q\s*\d+\s*[.):\]\-–—]?\s+(?=\S)(.+)$/i,
+      // "3." / "3)" / "3]" / "3:" ordinal, separator then a letter (optional
+      // space). The letter lookahead keeps decimals like "3.5 miles" intact.
+      /^\d+\s*[.):\]]\s*(?=[A-Za-z])(.+)$/,
+      // "3He goes" — digits glued to the title, only before an upper-case letter.
+      /^\d+(?=[A-Z])([A-Za-z].*)$/
+    ];
+
+    for (const pattern of patterns) {
+      const m = cleaned.match(pattern);
+      if (m && m[1] && m[1].trim()) {
+        return m[1].trim();
+      }
+    }
+
+    return original;
+  }
+
   function cleanLabel(text) {
     if (!text) return text;
     let cleaned = stripTypeSuffix(text);
     cleaned = cleaned.replace(/\s+/g, ' ').trim();
     cleaned = cleaned.replace(/^\*\s*/, '');
     cleaned = cleaned.replace(/\s*\*$/, '');
+    cleaned = stripLeadingOrdinal(cleaned);
     
     cleaned = cleaned.replace(/\.{2,}\s*$/, match => match.trimEnd());
     
@@ -2142,6 +2191,8 @@
       getFieldLabel,
       getFieldValue,
       getFieldKey,
+      cleanLabel,
+      stripLeadingOrdinal,
       getRadioGroupLabel,
       getCheckboxGroupLabel,
       getBaseline: () => baseline
