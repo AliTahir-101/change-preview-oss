@@ -1004,6 +1004,139 @@
     return str.length > len ? str.slice(0, len) + '…' : str;
   }
 
+  /**
+   * Guard so we never run more than one post-submit success watcher at a time.
+   */
+  let successWatcherActive = false;
+
+  /**
+   * Does the form (or page) still show outstanding validation errors?
+   *
+   * Covers native HTML5 constraint validation (`:invalid`) and common
+   * framework/ARIA error markers used by MS Forms, Google Forms, React, etc.
+   * If this is true, the submit clearly did NOT succeed and the user is still
+   * on the same form, so we must keep the baseline/detections.
+   */
+  function hasOutstandingValidationErrors(form) {
+    const scope = (form && document.contains(form)) ? form : document;
+    try {
+      if (scope.querySelector('input:invalid, select:invalid, textarea:invalid')) {
+        return true;
+      }
+    } catch {}
+    try {
+      if (scope.querySelector('[aria-invalid="true"]')) return true;
+    } catch {}
+    return false;
+  }
+
+  /**
+   * After a confirmed Save/Submit we must NOT assume the submit succeeded.
+   * Many submits fail (required field empty, server-side validation) and leave
+   * the user on the SAME form. Re-baselining in that case would wipe the user's
+   * Was/Now detections even though nothing was actually saved.
+   *
+   * Instead, watch for concrete evidence that the form actually succeeded or the
+   * user left it, and ONLY then re-baseline (which clears detections):
+   *   - the URL changes (SPA route change / navigation to a thank-you page)
+   *   - the submitted <form> is detached / replaced in the DOM
+   *   - every tracked field is detached and the form was replaced by non-form
+   *     success content (thank-you page), with no validation errors
+   *
+   * A full-page navigation tears down this content script entirely, so the fresh
+   * page gets a fresh baseline automatically; this watcher only needs to handle
+   * in-page (SPA / DOM-swap) success and, crucially, the "stayed on the same
+   * form" case where it deliberately does nothing.
+   *
+   * Soft SPA re-renders that keep an equivalent editable form are NOT treated as
+   * success: we require the editable fields to have (mostly) disappeared before
+   * clearing, so we never false-clear a form the user is still editing.
+   */
+  function watchForSubmitSuccess(contextForm) {
+    if (successWatcherActive) return;
+    successWatcherActive = true;
+
+    const startUrl = location.href;
+    const form = (contextForm && document.contains(contextForm)) ? contextForm : null;
+
+    const trackedEls = [];
+    for (const entry of baseline.values()) {
+      if (entry.element) trackedEls.push(entry.element);
+    }
+    const trackedCount = trackedEls.length;
+
+    const WATCH_MS = 6000;
+    const POLL_MS = 250;
+    const deadline = Date.now() + WATCH_MS;
+
+    let settled = false;
+    let pollTimer = null;
+
+    function finish(didLeaveOrSucceed) {
+      if (settled) return;
+      settled = true;
+      successWatcherActive = false;
+      if (pollTimer) clearInterval(pollTimer);
+      window.removeEventListener('pagehide', onPageHide, true);
+      // Only re-baseline (which clears detections) when the form truly left or
+      // succeeded. When the user stayed on the same form we intentionally do
+      // nothing, so Was/Now detections and Keep storage remain untouched.
+      if (didLeaveOrSucceed) {
+        snapshotBaseline();
+      }
+    }
+
+    // A real form-submit navigation fires pagehide and then tears down this
+    // script; stop polling so we don't act on a dying page. We do NOT clear on
+    // pagehide itself to avoid wiping detections for bfcache-restored forms.
+    function onPageHide() {
+      if (settled) return;
+      settled = true;
+      successWatcherActive = false;
+      if (pollTimer) clearInterval(pollTimer);
+      window.removeEventListener('pagehide', onPageHide, true);
+    }
+
+    function poll() {
+      if (settled) return;
+
+      // Strong signal: SPA route change / navigation to a different URL.
+      if (location.href !== startUrl) {
+        finish(true);
+        return;
+      }
+
+      // DOM-replacement signals. Guard against soft SPA re-renders that keep an
+      // equivalent editable form by requiring the editable fields to be (mostly)
+      // gone and no validation errors to be outstanding before we clear.
+      const formDetached = !!form && !document.contains(form);
+      let connected = 0;
+      for (const el of trackedEls) {
+        if (el && el.isConnected) connected++;
+      }
+      const allTrackedGone = trackedCount > 0 && connected === 0;
+
+      if ((formDetached || allTrackedGone) && !hasOutstandingValidationErrors(form)) {
+        const currentFieldCount = collectFields().length;
+        const replacedBySuccessContent =
+          currentFieldCount <= Math.max(1, Math.floor(trackedCount * 0.25));
+        if (replacedBySuccessContent) {
+          finish(true);
+          return;
+        }
+      }
+
+      if (Date.now() >= deadline) {
+        finish(false);
+      }
+    }
+
+    window.addEventListener('pagehide', onPageHide, true);
+    pollTimer = setInterval(poll, POLL_MS);
+    // Immediate check too, for very fast SPA transitions.
+    setTimeout(poll, 50);
+  }
+
   function handleSaveClick(e) {
     if (!saveInterceptEnabled) return;
     if (modalOpen) return;
@@ -1024,13 +1157,18 @@
       dirty,
       () => {
         saveInterceptEnabled = false;
+        // Capture the form context BEFORE we clear pendingSaveTarget so the
+        // success watcher can tell whether we actually left this form.
+        const contextForm = pendingSaveTarget ? pendingSaveTarget.closest('form') : null;
         if (pendingSaveTarget) {
           pendingSaveTarget.click();
         }
         setTimeout(() => {
           saveInterceptEnabled = true;
           pendingSaveTarget = null;
-          setTimeout(() => snapshotBaseline(), 500);
+          // Do NOT assume success. Only re-baseline if the form really leaves or
+          // succeeds; a failed submit (e.g. required field empty) keeps detections.
+          watchForSubmitSuccess(contextForm);
         }, 100);
       },
       () => {
@@ -1103,6 +1241,8 @@
         dirty,
         () => {
           saveInterceptEnabled = false;
+          // requestSubmit() re-runs HTML5 constraint validation, so a required
+          // empty field keeps the user on the same form and fires no navigation.
           if (form.requestSubmit) {
             form.requestSubmit();
           } else {
@@ -1110,7 +1250,9 @@
           }
           setTimeout(() => {
             saveInterceptEnabled = true;
-            setTimeout(() => snapshotBaseline(), 500);
+            // Do NOT assume success. Only re-baseline if the form really leaves or
+            // succeeds; a failed submit (e.g. required field empty) keeps detections.
+            watchForSubmitSuccess(form);
           }, 100);
         },
         () => {}

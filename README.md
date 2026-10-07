@@ -40,6 +40,13 @@ Two test pages are included:
 ### `fixtures/plain-admin.html` — Basic Admin Settings
 A traditional admin settings page with standard form fields.
 
+### `fixtures/submit-validation.html` — Submit vs. validation
+A profile form with a **required** email field. Use it to verify that a *failed*
+submit (required field empty → HTML5 validation keeps you on the form) does **not**
+wipe detections, while a *successful* submit (valid field → the form is replaced by
+a thank-you message, simulating real success) clears them. Turn **Keep** on first to
+confirm Keep-after-reload storage also survives a failed submit.
+
 ### `fixtures/ms-forms-like.html` — Microsoft Forms-like
 Mimics Microsoft Forms' DOM structure to test label resolution. Verifies that:
 - Question titles like "What is your name?" are used as labels
