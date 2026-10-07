@@ -52,6 +52,23 @@ Mimics Microsoft Forms' DOM structure to test label resolution. Verifies that:
 - Question titles like "What is your name?" are used as labels
 - Generic type indicators like "Multi-line text" are ignored
 - Radio option values like "Three by one" don't become field labels
+- **Apartment Yes/No (real MS Forms Choice)** — the question title is a plain
+  styled `<span>` (no `question-title` class, no heading role) and the Yes/No
+  radios are clickable cards. Field must be the full question; Was/Now = Yes/No.
+- **House type (card checkboxes)** — a multi-select rendered as clickable cards
+  whose checkboxes don't share a `name`. Field must be "House type"; Was/Now =
+  the selected option labels (never bare Checked/Unchecked).
+
+### Automated harness
+
+`tests/label-resolution.test.mjs` runs `content/content.js` inside jsdom against
+the fixtures and asserts the above (plus that Reapply restores the correct
+checks). Run it with:
+
+```bash
+npm install
+npm test
+```
 
 **To test:**
 1. Open the fixture file in Chrome (`file:///path/to/fixtures/ms-forms-like.html`)

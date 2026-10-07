@@ -149,6 +149,54 @@
       flex: 1;
     }
     
+    /*
+      Real-Microsoft-Forms patterns (retest fixtures).
+      The question title is a plain styled span (NO "question-title" class,
+      NO heading role) sitting as a sibling above the option cards; the
+      type indicator ("Choice") is separate chrome. Options are clickable
+      cards wrapping the (visually small) native input.
+    */
+    .ms-q-stem {
+      font-size: 14px;
+      font-weight: 600;
+      color: #323130;
+      margin-bottom: 4px;
+    }
+    
+    .ms-q-kind {
+      font-size: 11px;
+      color: #8a8886;
+      margin-bottom: 12px;
+    }
+    
+    .ms-q-choices {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    
+    .ms-q-card {
+      border: 1px solid #edebe9;
+      border-radius: 2px;
+      transition: background 0.1s, border-color 0.1s;
+    }
+    
+    .ms-q-card:hover {
+      background: #f3f2f1;
+    }
+    
+    .ms-q-card label {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 12px;
+      margin: 0;
+      font-size: 14px;
+      font-weight: 400;
+      color: #323130;
+      cursor: pointer;
+    }
+    
     /* Dropdown styles */
     .office-form-dropdown {
       width: 100%;
@@ -542,6 +590,57 @@
           <textarea class="office-form-textfield" 
                     name="comments" 
                     placeholder="Enter your response"></textarea>
+        </div>
+        
+        <!--
+          Question 9: Apartment Yes/No — REAL Microsoft Forms "Choice" pattern.
+          The question title is a plain <span> (no question-title class, no
+          heading role); the type indicator "Choice" is separate chrome; the
+          Yes/No options are clickable cards wrapping radios that share a name.
+
+          BUG (before fix): Field was reported as the first option ("No") and the
+          value toggled yes/no — because the title isn't in a recognised title
+          node, so resolution fell back to the first option's own label.
+          EXPECTED: Field = the full question; Was/Now = "Yes" / "No".
+        -->
+        <div class="office-form-question" data-automation-id="question_apartment_6f2a">
+          <div class="ms-q-stem"><span class="text-format-content">Are any of the applicants currently living in an apartment?</span></div>
+          <div class="ms-q-kind" aria-hidden="true">Choice</div>
+          <div class="ms-q-choices">
+            <div class="ms-q-card">
+              <label><input type="radio" name="rApartment" value="yes"><span class="text-format-content">Yes</span></label>
+            </div>
+            <div class="ms-q-card">
+              <label><input type="radio" name="rApartment" value="no" checked><span class="text-format-content">No</span></label>
+            </div>
+          </div>
+        </div>
+        
+        <!--
+          Question 10: House type — REAL Microsoft Forms multi-select rendered as
+          CARD/BUTTON checkboxes. The checkboxes do NOT share a name (React
+          manages selection); the title is a plain <span> above the cards.
+
+          BUG (before fix): each card showed Field = option text and
+          Was = unchecked / Now = checked, because the group title couldn't be
+          resolved so the options were reported individually.
+          EXPECTED: Field = "House type"; Was/Now = the human option labels of
+          the selected set (e.g. "Nursing home" → "Block of flats").
+        -->
+        <div class="office-form-question" data-automation-id="question_housetype_9c1b">
+          <div class="ms-q-stem"><span class="text-format-content">House type</span></div>
+          <div class="ms-q-kind" aria-hidden="true">Choice</div>
+          <div class="ms-q-choices">
+            <div class="ms-q-card">
+              <label><input type="checkbox" value="block_of_flats"><span class="text-format-content">Block of flats</span></label>
+            </div>
+            <div class="ms-q-card">
+              <label><input type="checkbox" value="nursing_home" checked><span class="text-format-content">Nursing home</span></label>
+            </div>
+            <div class="ms-q-card">
+              <label><input type="checkbox" value="detached_house"><span class="text-format-content">Detached house</span></label>
+            </div>
+          </div>
         </div>
         
         <div class="form-actions">
