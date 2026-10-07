@@ -192,7 +192,10 @@ The license server is a Cloudflare Worker in the `worker/` directory. See [`work
 
 **Required setup for deployment:**
 1. Create Cloudflare KV namespace
-2. Set secrets: `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`
+2. Set secrets:
+   - `STRIPE_SECRET_KEY` — Stripe API key
+   - `STRIPE_WEBHOOK_SECRET` — Stripe webhook signing secret
+   - `ENGINEMAILER_API_KEY` — Enginemailer API key for license emails
 3. Deploy with `wrangler deploy`
 4. Create Stripe Payment Link (€9.99 one-time)
 5. Configure Stripe webhook to point to `/stripe/webhook`
