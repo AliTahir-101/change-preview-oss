@@ -59,6 +59,21 @@ Mimics Microsoft Forms' DOM structure to test label resolution. Verifies that:
   whose checkboxes don't share a `name`. Field must be "House type"; Was/Now =
   the selected option labels (never bare Checked/Unchecked).
 
+### `fixtures/aspnet-checkboxlist.html` — ASP.NET WebForms CheckBoxList / RadioButtonList
+Reproduces the portable structural pattern used by ASP.NET WebForms (and similar
+admin UIs): the list renders as a `<table>` whose id is referenced by a section
+heading `<h2><label class="control-label" for="<listId>">`, each option has its
+own unique id/name (`…_0`/`…$0`, `…_1`/`…$1`), and options do **not** share a
+name for a CheckBoxList. Verifies that:
+- **Independent checkboxes** stay one row per box (Was/Now = Unchecked/Checked),
+  never folded into a single comma-joined multi-select group.
+- The checkbox **Field** combines the section heading and option text, e.g.
+  `House type · Block of flats` — not just `Block of flats`.
+- **RadioButtonList** (options share a `name`) collapses to one row whose Field
+  is the full section question and whose Was/Now are the option labels (Yes/No).
+- Detection is **structural** (section label `for` → list/table id, `divContainer_*`
+  / Bootstrap form-group wrappers) — no site, product, or language names.
+
 ### Automated harness
 
 `tests/label-resolution.test.mjs` runs `content/content.js` inside jsdom against
@@ -151,8 +166,10 @@ This is a Manifest V3 Chrome extension. The structure is:
 │   └── panel.js        # Side panel logic
 ├── icons/              # Extension icons
 └── fixtures/
-    ├── plain-admin.html   # Basic admin settings test page
-    └── ms-forms-like.html # Microsoft Forms-like test page
+    ├── plain-admin.html         # Basic admin settings test page
+    ├── ms-forms-like.html       # Microsoft Forms-like test page
+    ├── submit-validation.html   # Submit vs. validation test page
+    └── aspnet-checkboxlist.html # ASP.NET CheckBoxList/RadioButtonList test page
 ```
 
 ## License

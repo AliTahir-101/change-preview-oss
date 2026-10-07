@@ -239,6 +239,101 @@ console.log('\nsubmit-validation.html');
 }
 
 /* ------------------------------------------------------------------ */
+/* aspnet-checkboxlist.html (ASP.NET WebForms CheckBoxList/RadioButtonList) */
+/* ------------------------------------------------------------------ */
+console.log('\naspnet-checkboxlist.html');
+{
+  const { document, internals } = loadFixture('fixtures/aspnet-checkboxlist.html');
+  let fields = internals.collectFields();
+
+  // --- RadioButtonList: Field = full section question, value = option -------
+  const rentKey = 'name:ctl00$ContentPlaceHolder1$rblCurrentlyRenting';
+  const rent = fieldByKey(fields, rentKey);
+  check('aspnet radio: tracked as one row', !!rent, `${rentKey} not found`);
+  if (rent) {
+    eq('aspnet radio: type is radio', rent.type, 'radio');
+    check('aspnet radio: Field is the full section question',
+      /are any of the applicants currently living in an apartment/i.test(rent.label),
+      `label was ${JSON.stringify(rent.label)}`);
+    check('aspnet radio: Field is NOT the option (No/Yes)',
+      !['no', 'yes'].includes(String(rent.label).toLowerCase()),
+      `label was ${JSON.stringify(rent.label)}`);
+    check('aspnet radio: Field has no leftover <br> glue',
+      rent.label.includes('currently living'),
+      `label was ${JSON.stringify(rent.label)}`);
+  }
+
+  // --- CheckBoxList: INDEPENDENT per-box rows, Field = "Section · Option" ---
+  const blockKey = 'name:ctl00$ContentPlaceHolder1$cblHouseType$0';
+  const block = fieldByKey(fields, blockKey);
+  check('aspnet checkbox: Block of flats tracked as its own row', !!block,
+    `${blockKey} not found`);
+  if (block) {
+    eq('aspnet checkbox: type stays single checkbox', block.type, 'checkbox');
+    check('aspnet checkbox: Field contains the section heading "House type"',
+      block.label.includes('House type'), `label was ${JSON.stringify(block.label)}`);
+    check('aspnet checkbox: Field contains the option "Block of flats"',
+      block.label.includes('Block of flats'), `label was ${JSON.stringify(block.label)}`);
+    check('aspnet checkbox: Field joins section and option (not option-only)',
+      block.label !== 'Block of flats', `label was ${JSON.stringify(block.label)}`);
+    eq('aspnet checkbox: Was/Now stays Unchecked (independent box)',
+      block.value, 'Unchecked');
+  }
+
+  // Each option is its OWN row — not folded into one comma-joined group.
+  check('aspnet checkbox: no checkbox-group row created for the list',
+    !fields.some(f => f.type === 'checkbox-group' &&
+      /house type|apartment type/i.test(String(f.label))),
+    `groups: ${fields.filter(f => f.type === 'checkbox-group').map(f => f.label).join(' | ')}`);
+  check('aspnet checkbox: House type list yields multiple independent rows',
+    fields.filter(f => f.type === 'checkbox' &&
+      f.key.includes('cblHouseType')).length >= 5,
+    'expected one row per House type option');
+
+  // --- Second list: section label has `for` but no id -----------------------
+  const roomKey = 'name:ctl00$ContentPlaceHolder1$cblApartmentType$0';
+  const room = fieldByKey(fields, roomKey);
+  check('aspnet checkbox: Apartment type option tracked', !!room, `${roomKey} not found`);
+  if (room) {
+    check('aspnet checkbox: Apartment type section resolved',
+      room.label.includes('Apartment type') && room.label.includes('1 room'),
+      `label was ${JSON.stringify(room.label)}`);
+  }
+
+  // --- Values flow: checking a radio surfaces the option text, not question --
+  const noRadio = document.getElementById('ContentPlaceHolder1_rblCurrentlyRenting_0');
+  noRadio.checked = true;
+  fields = internals.collectFields();
+  eq('aspnet radio: value is the option label (No)',
+    fieldByKey(fields, rentKey)?.value, 'No');
+
+  // --- Reapply toggles the correct independent checkbox ---------------------
+  internals.snapshotBaseline();
+  internals.applyChangesWithBaseline([{
+    key: blockKey,
+    label: 'House type \u00B7 Block of flats',
+    type: 'checkbox',
+    was: 'Unchecked',
+    now: 'Checked'
+  }]);
+  const blockCb = document.getElementById('ContentPlaceHolder1_cblHouseType_0');
+  check('aspnet reapply: Block of flats checkbox toggled on', blockCb?.checked === true);
+
+  // --- Reapply toggles the correct radio -----------------------------------
+  internals.applyChangesWithBaseline([{
+    key: rentKey,
+    label: 'Are any of the applicants currently living in an apartment at the property?',
+    type: 'radio',
+    was: 'No',
+    now: 'Yes'
+  }]);
+  const yesRadio = document.getElementById('ContentPlaceHolder1_rblCurrentlyRenting_1');
+  const noRadio2 = document.getElementById('ContentPlaceHolder1_rblCurrentlyRenting_0');
+  check('aspnet reapply: Yes radio selected', yesRadio?.checked === true);
+  check('aspnet reapply: No radio deselected', noRadio2?.checked === false);
+}
+
+/* ------------------------------------------------------------------ */
 console.log('');
 if (failed === 0) {
   console.log(`All ${passed} checks passed.`);
