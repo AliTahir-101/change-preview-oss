@@ -40,11 +40,50 @@ Two test pages are included:
 ### `fixtures/plain-admin.html` — Basic Admin Settings
 A traditional admin settings page with standard form fields.
 
+### `fixtures/submit-validation.html` — Submit vs. validation
+A profile form with a **required** email field. Use it to verify that a *failed*
+submit (required field empty → HTML5 validation keeps you on the form) does **not**
+wipe detections, while a *successful* submit (valid field → the form is replaced by
+a thank-you message, simulating real success) clears them. Turn **Keep** on first to
+confirm Keep-after-reload storage also survives a failed submit.
+
 ### `fixtures/ms-forms-like.html` — Microsoft Forms-like
 Mimics Microsoft Forms' DOM structure to test label resolution. Verifies that:
 - Question titles like "What is your name?" are used as labels
 - Generic type indicators like "Multi-line text" are ignored
 - Radio option values like "Three by one" don't become field labels
+- **Apartment Yes/No (real MS Forms Choice)** — the question title is a plain
+  styled `<span>` (no `question-title` class, no heading role) and the Yes/No
+  radios are clickable cards. Field must be the full question; Was/Now = Yes/No.
+- **House type (card checkboxes)** — a multi-select rendered as clickable cards
+  whose checkboxes don't share a `name`. Field must be "House type"; Was/Now =
+  the selected option labels (never bare Checked/Unchecked).
+
+### `fixtures/aspnet-checkboxlist.html` — ASP.NET WebForms CheckBoxList / RadioButtonList
+Reproduces the portable structural pattern used by ASP.NET WebForms (and similar
+admin UIs): the list renders as a `<table>` whose id is referenced by a section
+heading `<h2><label class="control-label" for="<listId>">`, each option has its
+own unique id/name (`…_0`/`…$0`, `…_1`/`…$1`), and options do **not** share a
+name for a CheckBoxList. Verifies that:
+- **Independent checkboxes** stay one row per box (Was/Now = Unchecked/Checked),
+  never folded into a single comma-joined multi-select group.
+- The checkbox **Field** combines the section heading and option text, e.g.
+  `House type · Block of flats` — not just `Block of flats`.
+- **RadioButtonList** (options share a `name`) collapses to one row whose Field
+  is the full section question and whose Was/Now are the option labels (Yes/No).
+- Detection is **structural** (section label `for` → list/table id, `divContainer_*`
+  / Bootstrap form-group wrappers) — no site, product, or language names.
+
+### Automated harness
+
+`tests/label-resolution.test.mjs` runs `content/content.js` inside jsdom against
+the fixtures and asserts the above (plus that Reapply restores the correct
+checks). Run it with:
+
+```bash
+npm install
+npm test
+```
 
 **To test:**
 1. Open the fixture file in Chrome (`file:///path/to/fixtures/ms-forms-like.html`)
@@ -127,8 +166,10 @@ This is a Manifest V3 Chrome extension. The structure is:
 │   └── panel.js        # Side panel logic
 ├── icons/              # Extension icons
 └── fixtures/
-    ├── plain-admin.html   # Basic admin settings test page
-    └── ms-forms-like.html # Microsoft Forms-like test page
+    ├── plain-admin.html         # Basic admin settings test page
+    ├── ms-forms-like.html       # Microsoft Forms-like test page
+    ├── submit-validation.html   # Submit vs. validation test page
+    └── aspnet-checkboxlist.html # ASP.NET CheckBoxList/RadioButtonList test page
 ```
 
 ## License

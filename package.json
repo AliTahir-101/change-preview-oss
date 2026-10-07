@@ -1,0 +1,12 @@
+{
+  "name": "changepreview",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ChangePreview Chrome extension — dev/test tooling (not shipped in the unpacked extension).",
+  "scripts": {
+    "test": "node tests/label-resolution.test.mjs"
+  },
+  "devDependencies": {
+    "jsdom": "^24.1.0"
+  }
+}

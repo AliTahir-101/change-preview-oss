@@ -66,6 +66,49 @@
     'i'
   );
 
+  /**
+   * Container selectors that bound a checkbox/radio "group" (one question with
+   * several options). Kept in a single constant so detection (collectFields),
+   * value reading, and Reapply (findCheckboxGroup) all agree on the boundary.
+   */
+  /**
+   * Selectors for a MS-Forms / admin "question root" — the ancestor that wraps
+   * ONE question (its title plus all of its options). On real Microsoft Forms
+   * the title is NOT always inside a ".office-form-question-title"; it may live
+   * in a Fluent UI tree, a data-automation-id node, or just a styled <span>.
+   * We climb ancestors against this list and pick the nearest one that contains
+   * BOTH a title node and all the option inputs (never the single option card).
+   */
+  const QUESTION_ROOT_SELECTORS = [
+    '[data-automation-id*="questionContent"]',
+    '[data-automation-id*="question"]',
+    '[class*="office-form-question"]',
+    'fieldset',
+    '[role="radiogroup"]',
+    '[role="group"]',
+    '[class*="question"]',
+    '[class*="Question"]',
+    '[class*="form-group"]',
+    '[class*="formGroup"]',
+    '[class*="field-container"]',
+    '[class*="fieldContainer"]',
+    'section'
+  ];
+  const QUESTION_ROOT_SELECTOR = QUESTION_ROOT_SELECTORS.join(', ');
+
+  /**
+   * An option's own clickable wrapper (label / choice card / role=radio cell).
+   * Used both to collect the option's visible text and to make sure we never
+   * mistake an option's own text for the group question title.
+   */
+  const OPTION_WRAPPER_SELECTOR = [
+    'label',
+    '[class*="choice"]', '[class*="Choice"]',
+    '[class*="option"]', '[class*="Option"]',
+    '[role="radio"]', '[role="checkbox"]',
+    '[class*="checkbox-item"]', '[class*="radio-item"]'
+  ].join(', ');
+
   let baseline = new Map();
   let radioGroupLabels = new Map();
   let checkboxGroupLabels = new Map();
@@ -155,12 +198,61 @@
     return cleaned;
   }
   
+  /**
+   * Strip a leading question/ordinal index that Microsoft Forms (and similar
+   * builders) sometimes glue onto the front of a question title — the MCQ item
+   * number rendered immediately before the real stem, e.g. the 3rd question
+   * "He goes ....................every month." surfacing as
+   * "3He goes ....................every month.".
+   *
+   * Handles, in order:
+   *   - "Question 3" / "Question 3." / "Question 3:" / "Question 3)" prefixes
+   *   - "Q3" / "Q3." / "Q3)" / "Q3:" prefixes
+   *   - "3." / "3)" / "3]" / "3:" ordinals (with or without a trailing space)
+   *   - "3He goes" — digits glued directly onto the real title
+   *
+   * Deliberately conservative so it never eats real content that merely starts
+   * with a number:
+   *   - a bare "3 days a week ..." (digits + space + word, no ordinal separator)
+   *     is left untouched,
+   *   - decimals like "3.5 miles" are not treated as an ordinal, and
+   *   - glued digits are only stripped when the next char is an UPPER-case
+   *     letter, so ordinal/unit words like "3rd floor" or "3km" survive.
+   */
+  function stripLeadingOrdinal(text) {
+    if (!text) return text;
+    const original = text;
+    const cleaned = text.replace(/^\s+/, '');
+
+    const patterns = [
+      // "Question 3" + optional separator + required space before the title.
+      /^question\s*\d+\s*[.):\]\-–—]?\s+(?=\S)(.+)$/i,
+      // "Q3" + optional separator + required space before the title.
+      /^q\s*\d+\s*[.):\]\-–—]?\s+(?=\S)(.+)$/i,
+      // "3." / "3)" / "3]" / "3:" ordinal, separator then a letter (optional
+      // space). The letter lookahead keeps decimals like "3.5 miles" intact.
+      /^\d+\s*[.):\]]\s*(?=[A-Za-z])(.+)$/,
+      // "3He goes" — digits glued to the title, only before an upper-case letter.
+      /^\d+(?=[A-Z])([A-Za-z].*)$/
+    ];
+
+    for (const pattern of patterns) {
+      const m = cleaned.match(pattern);
+      if (m && m[1] && m[1].trim()) {
+        return m[1].trim();
+      }
+    }
+
+    return original;
+  }
+
   function cleanLabel(text) {
     if (!text) return text;
     let cleaned = stripTypeSuffix(text);
     cleaned = cleaned.replace(/\s+/g, ' ').trim();
     cleaned = cleaned.replace(/^\*\s*/, '');
     cleaned = cleaned.replace(/\s*\*$/, '');
+    cleaned = stripLeadingOrdinal(cleaned);
     
     cleaned = cleaned.replace(/\.{2,}\s*$/, match => match.trimEnd());
     
@@ -257,71 +349,451 @@
     return null;
   }
   
+  /**
+   * Build a CSS-queryable DOM path for an element (used as a stable key when a
+   * group has no shared name/id to key on). Mirrors the path logic in
+   * getFieldKey so a key produced here can be resolved later via querySelector.
+   */
+  function getDomPath(el) {
+    const path = [];
+    let current = el;
+    while (current && current !== document.body && current.nodeType === 1) {
+      let tag = current.tagName.toLowerCase();
+      if (current.id) {
+        path.unshift(`#${CSS.escape(current.id)}`);
+        break;
+      }
+      const siblings = current.parentElement ? current.parentElement.children : [];
+      const idx = Array.from(siblings).filter(s => s.tagName === current.tagName).indexOf(current);
+      if (idx > 0) tag += `:nth-of-type(${idx + 1})`;
+      path.unshift(tag);
+      current = current.parentElement;
+    }
+    return path.join('>');
+  }
+
+  /**
+   * The option input's own clickable wrapper (label / choice card / role cell).
+   * Falls back to the direct parent so card-style controls still resolve.
+   */
+  function getOptionWrapper(input) {
+    return (input.closest && input.closest(OPTION_WRAPPER_SELECTOR)) || input.parentElement;
+  }
+
+  /**
+   * Lower-cased set of every text that belongs to an OPTION (its visible label
+   * text + its value). The question title must never equal one of these — if a
+   * candidate does, we reject it and keep looking (Yes/No/Block of flats etc.).
+   */
+  function buildForbiddenOptionTexts(optionInputs) {
+    const set = new Set();
+    const add = (t) => {
+      if (t == null) return;
+      const s = String(t).trim().toLowerCase();
+      if (s) set.add(s);
+    };
+    for (const inp of optionInputs) {
+      add(inp.value);
+      const w = getOptionWrapper(inp);
+      if (w) {
+        const clone = w.cloneNode(true);
+        clone.querySelectorAll('input, select, textarea').forEach(c => c.remove());
+        add(clone.textContent);
+      }
+    }
+    return set;
+  }
+
+  /**
+   * All ancestor elements (nearest first) that look like a question root AND
+   * contain every one of the group's option inputs. The real question container
+   * is the nearest such ancestor that also yields a title; the single option
+   * card is skipped because it does not contain the OTHER options.
+   */
+  function getMatchingRoots(el, optionInputs) {
+    const roots = [];
+    let cur = el.parentElement;
+    while (cur && cur !== document.body && cur.nodeType === 1) {
+      if (cur.matches && cur.matches(QUESTION_ROOT_SELECTOR) &&
+          optionInputs.every(i => cur.contains(i))) {
+        roots.push(cur);
+      }
+      cur = cur.parentElement;
+    }
+    return roots;
+  }
+
+  /**
+   * Extract the GROUP question title from a question root, rejecting anything
+   * that is really an option's text, a generic type string ("Choice", "Single
+   * choice"), a points marker, or a bare number. Works for real Microsoft Forms
+   * where the title is a plain styled <span>/<div> (no title class, no heading
+   * role) sitting as a sibling above the option cards.
+   *
+   * @param {Element} root
+   * @param {Element[]} optionInputs
+   * @returns {string|null}
+   */
+  function extractQuestionTitle(root, optionInputs) {
+    if (!root) return null;
+
+    const forbidden = buildForbiddenOptionTexts(optionInputs);
+    const optionWrappers = optionInputs.map(getOptionWrapper).filter(Boolean);
+    const optionLabelEls = new Set();
+    for (const inp of optionInputs) {
+      if (inp.id) {
+        const l = root.querySelector(`label[for="${CSS.escape(inp.id)}"]`);
+        if (l) optionLabelEls.add(l);
+      }
+      const wrap = inp.closest('label');
+      if (wrap) optionLabelEls.add(wrap);
+    }
+    const optionIds = new Set(optionInputs.map(i => i.id).filter(Boolean));
+
+    const inAnyWrapper = (node) =>
+      optionWrappers.some(w => w === node || (w.contains && w.contains(node)));
+    const containsOptionInput = (node) =>
+      optionInputs.some(i => node.contains && node.contains(i));
+
+    const isBadCandidate = (raw) => {
+      if (!raw) return true;
+      const t = raw.trim();
+      if (!isValidLabelText(t)) return true;
+      if (forbidden.has(t.toLowerCase())) return true;
+      if (/^[0-9.\s()]+$/.test(t)) return true;
+      const cleaned = cleanLabel(t);
+      if (!cleaned) return true;
+      if (isGenericTypeString(cleaned)) return true;
+      if (forbidden.has(cleaned.toLowerCase())) return true;
+      return false;
+    };
+
+    // 1. Explicit group semantics on the root itself.
+    const labelledBy = root.getAttribute && root.getAttribute('aria-labelledby');
+    if (labelledBy) {
+      const txt = labelledBy.split(/\s+/)
+        .map(id => { const e = document.getElementById(id); return e ? e.textContent.trim() : ''; })
+        .join(' ').trim();
+      if (!isBadCandidate(txt)) return cleanLabel(txt);
+    }
+    const ariaLabel = root.getAttribute && root.getAttribute('aria-label');
+    if (ariaLabel && !isBadCandidate(ariaLabel)) return cleanLabel(ariaLabel);
+
+    // 2. Recognised title containers (MS Forms / Google Forms / common builders).
+    const titleSelectors = [
+      '[class*="question-title"]', '[class*="questionTitle"]',
+      '[class*="question_title"]', '[class*="QuestionTitle"]',
+      '[data-automation-id*="questionTitle"]', '[data-automation-id*="question-title"]',
+      '[class*="field-label"]', '[class*="fieldLabel"]',
+      '[class*="form-label"]', '[class*="formLabel"]',
+      'legend', '[role="heading"]',
+      'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+      '.section-title'
+    ];
+    for (const sel of titleSelectors) {
+      for (const node of root.querySelectorAll(sel)) {
+        if (optionLabelEls.has(node) || inAnyWrapper(node) || containsOptionInput(node)) continue;
+        if (!isBadCandidate(node.textContent)) return cleanLabel(node.textContent.trim());
+      }
+    }
+
+    // 3. Bare non-option <label> alongside the options (admin "House type").
+    for (const lab of root.querySelectorAll('label')) {
+      if (optionLabelEls.has(lab) || inAnyWrapper(lab)) continue;
+      if (lab.querySelector('input, select, textarea')) continue;
+      const forId = lab.getAttribute('for');
+      if (forId && optionIds.has(forId)) continue;
+      if (!isBadCandidate(lab.textContent)) return cleanLabel(lab.textContent.trim());
+    }
+
+    // 4. Generic fallback — real MS Forms renders the title as a plain styled
+    //    span/div with no title class. Take the first text-bearing node that is
+    //    not an option, not type chrome, and does not wrap any option input.
+    const generic = root.querySelectorAll('span, div, p, [class*="text"], [data-automation-id]');
+    for (const node of generic) {
+      if (optionLabelEls.has(node) || inAnyWrapper(node) || containsOptionInput(node)) continue;
+      if (!isBadCandidate(node.textContent)) return cleanLabel(node.textContent.trim());
+    }
+
+    return null;
+  }
+
+  /**
+   * Resolve the question-root title for a group by climbing from the option
+   * element through every candidate root (nearest first) until one yields a
+   * valid title. Returns null if none do (caller falls back to other labels).
+   */
+  function resolveGroupTitle(el, optionInputs) {
+    const roots = getMatchingRoots(el, optionInputs);
+    for (const root of roots) {
+      const title = extractQuestionTitle(root, optionInputs);
+      if (title) return title;
+    }
+    return null;
+  }
+
+  /**
+   * The nearest ancestor question root that holds MORE THAN ONE radio — i.e.
+   * the real group when radios are NOT tied together by a shared `name`
+   * (common on real MS Forms, where React manages selection). Returns null for
+   * a lone radio so it keeps its own option label.
+   */
+  function getRadioRoot(el) {
+    let cur = el.parentElement;
+    while (cur && cur !== document.body && cur.nodeType === 1) {
+      if (cur.matches && cur.matches(QUESTION_ROOT_SELECTOR)) {
+        if (cur.querySelectorAll('input[type="radio"]').length > 1) return cur;
+      }
+      cur = cur.parentElement;
+    }
+    return null;
+  }
+
+  /**
+   * The option inputs that make up a radio's group: prefer a shared `name`;
+   * otherwise fall back to every radio under the same question root.
+   */
+  function getRadioGroupInputs(el) {
+    if (el.name) {
+      return Array.from(document.querySelectorAll(`input[type="radio"][name="${CSS.escape(el.name)}"]`));
+    }
+    const root = getRadioRoot(el);
+    if (root) return Array.from(root.querySelectorAll('input[type="radio"]'));
+    return [el];
+  }
+
+  /**
+   * The group membership for a checkbox: the nearest question root that holds
+   * MORE THAN ONE checkbox. Card-style UIs (clickable cards wrapping a hidden
+   * checkbox) still resolve here. Returns null for a lone checkbox so it keeps
+   * its own option label and Checked/Unchecked value.
+   */
+  function getCheckboxGroupInputs(el) {
+    // ASP.NET CheckBoxList items are independent per-box rows, never a single
+    // comma-joined multi-select group, even inside a Bootstrap form-group.
+    if (isAspNetListItem(el)) return null;
+    let cur = el.parentElement;
+    while (cur && cur !== document.body && cur.nodeType === 1) {
+      if (cur.matches && cur.matches(QUESTION_ROOT_SELECTOR)) {
+        const cbs = Array.from(cur.querySelectorAll('input[type="checkbox"]'));
+        if (cbs.length > 1) return { root: cur, checkboxes: cbs };
+      }
+      cur = cur.parentElement;
+    }
+    return null;
+  }
+
   function getRadioGroupLabel(el) {
     if (el.type !== 'radio') return null;
     const name = el.name;
-    if (!name) return null;
-    
-    if (radioGroupLabels.has(name)) {
+
+    if (name && radioGroupLabels.has(name)) {
       return radioGroupLabels.get(name);
     }
-    
-    const radios = document.querySelectorAll(`input[type="radio"][name="${CSS.escape(name)}"]`);
-    if (radios.length === 0) return null;
-    
-    const firstRadio = radios[0];
-    
-    const groupContainer = firstRadio.closest('[role="radiogroup"]');
-    if (groupContainer) {
-      const labelledBy = groupContainer.getAttribute('aria-labelledby');
-      if (labelledBy) {
-        const labelEl = document.getElementById(labelledBy);
-        if (labelEl) {
-          const text = labelEl.textContent.trim();
-          if (isValidLabelText(text)) {
-            radioGroupLabels.set(name, text);
-            return text;
-          }
-        }
-      }
-      const groupLabel = groupContainer.getAttribute('aria-label');
-      if (groupLabel && isValidLabelText(groupLabel)) {
-        radioGroupLabels.set(name, groupLabel);
-        return groupLabel;
-      }
+
+    const optionInputs = getRadioGroupInputs(el);
+    if (optionInputs.length === 0) return null;
+    const firstRadio = optionInputs[0];
+
+    // Primary: climb to the question root and read the real title (handles real
+    // MS Forms where the title is a plain span, not a recognised title node).
+    let label = resolveGroupTitle(firstRadio, optionInputs);
+
+    // Fallbacks: legacy recognised paths.
+    if (!label) label = getLegendOrFieldsetLabel(firstRadio);
+    if (!label) label = getQuestionContainerLabel(firstRadio);
+    // ASP.NET RadioButtonList: section heading label whose `for` -> list id.
+    if (!label) label = getSectionHeadingLabel(firstRadio);
+
+    if (label) {
+      if (name) radioGroupLabels.set(name, label);
+      return label;
     }
-    
-    const legendLabel = getLegendOrFieldsetLabel(firstRadio);
-    if (legendLabel) {
-      radioGroupLabels.set(name, legendLabel);
-      return legendLabel;
-    }
-    
-    const questionLabel = getQuestionContainerLabel(firstRadio);
-    if (questionLabel) {
-      radioGroupLabels.set(name, questionLabel);
-      return questionLabel;
-    }
-    
     return null;
   }
-  
+
   function getCheckboxGroupLabel(el) {
     if (el.type !== 'checkbox') return null;
-    
-    const questionLabel = getQuestionContainerLabel(el);
-    if (questionLabel) {
-      return questionLabel;
+
+    // Only treat as a group when the question root really holds >1 checkbox so a
+    // lone checkbox keeps its own option label and Checked/Unchecked value.
+    const group = getCheckboxGroupInputs(el);
+    if (!group) return null;
+
+    let label = resolveGroupTitle(el, group.checkboxes);
+    if (!label) label = getLegendOrFieldsetLabel(el);
+    if (!label) label = getQuestionContainerLabel(el);
+    return label || null;
+  }
+
+  /**
+   * Extract clean visible text from a <label>-like element: strip nested form
+   * controls and convert <br> to spaces (so multi-line / machine-translated
+   * headings do not glue words together), then collapse whitespace.
+   */
+  function extractLabelText(labelEl) {
+    if (!labelEl) return '';
+    const clone = labelEl.cloneNode(true);
+    clone.querySelectorAll('input, select, textarea, [type="hidden"]').forEach(c => c.remove());
+    clone.querySelectorAll('br').forEach(br => {
+      br.replaceWith(labelEl.ownerDocument.createTextNode(' '));
+    });
+    return clone.textContent.replace(/\s+/g, ' ').trim();
+  }
+
+  /**
+   * True when a <label> is really an OPTION's label (its `for` targets a
+   * checkbox/radio, or it wraps an input) — such a label is never a section
+   * heading and must be rejected when hunting for the question title.
+   */
+  function isOptionInputLabel(labelEl) {
+    if (!labelEl) return false;
+    const forId = labelEl.getAttribute && labelEl.getAttribute('for');
+    if (forId) {
+      const target = labelEl.ownerDocument.getElementById(forId);
+      if (target && (target.type === 'checkbox' || target.type === 'radio')) return true;
     }
-    
-    const legendLabel = getLegendOrFieldsetLabel(el);
-    if (legendLabel) {
-      return legendLabel;
+    if (labelEl.querySelector && labelEl.querySelector('input, select, textarea')) return true;
+    return false;
+  }
+
+  /**
+   * Does this element look like a WebForms / admin "form group" block that
+   * wraps ONE question (its heading plus the list of options)? Purely
+   * structural / class-name heuristics — no site, product, or language names.
+   */
+  const SECTION_CONTAINER_ID = /divcontainer|formgroup|form-group|field-?container|question/i;
+  const SECTION_CONTAINER_CLASS = /\b(form-group|form-row|control-group|field-container|fieldcontainer|col-(?:xs|sm|md|lg|xl)-\d+)\b/i;
+  function isSectionContainer(elm) {
+    if (!elm || elm.nodeType !== 1) return false;
+    if (elm.id && SECTION_CONTAINER_ID.test(elm.id)) return true;
+    const cls = (elm.getAttribute && elm.getAttribute('class')) || '';
+    return SECTION_CONTAINER_CLASS.test(cls);
+  }
+
+  /**
+   * Resolve the SECTION heading for an independent checkbox / radio rendered by
+   * an ASP.NET WebForms CheckBoxList / RadioButtonList (or a similar admin UI).
+   *
+   * Portable, structure-only heuristics (never keyed on site names or language):
+   *   1. A <label for="<listId>"> whose `for` points at the enclosing list
+   *      container (<table>/<ul>/role=list/radiogroup) id, or at the option id
+   *      with its trailing "_<index>" removed, or at any ancestor id. The
+   *      label's `for` targeting the LIST (not an individual option) is the
+   *      defining CheckBoxList/RadioButtonList signature.
+   *   2. Otherwise, climb to the nearest form-group-like container and read its
+   *      heading label (h1-h6 > label / label.control-label / legend / h1-h6).
+   */
+  function getSectionHeadingLabel(el) {
+    const doc = el.ownerDocument || document;
+
+    // --- 1. label[for] pointing at the list container / stripped option id ---
+    const candidateIds = [];
+    const pushId = (id) => { if (id) candidateIds.push(id); };
+
+    const listContainer = el.closest('table, ul, ol, [role="list"], [role="radiogroup"], [role="group"]');
+    if (listContainer) pushId(listContainer.id);
+    if (el.id) {
+      const m = el.id.match(/^(.*?)_\d+$/);
+      if (m && m[1]) pushId(m[1]);
     }
-    
+    let anc = el.parentElement;
+    let ancDepth = 0;
+    while (anc && anc.nodeType === 1 && anc !== document.body && ancDepth < 6) {
+      pushId(anc.id);
+      anc = anc.parentElement;
+      ancDepth++;
+    }
+
+    const seen = new Set();
+    for (const id of candidateIds) {
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      let labelEl = null;
+      try {
+        labelEl = doc.querySelector(`label[for="${CSS.escape(id)}"]`);
+      } catch { labelEl = null; }
+      if (!labelEl || isOptionInputLabel(labelEl)) continue;
+      const text = extractLabelText(labelEl);
+      if (isValidLabelText(text)) return text;
+    }
+
+    // --- 2. nearest form-group-like container's heading label ----------------
+    let cur = el.parentElement;
+    let depth = 0;
+    while (cur && cur !== document.body && cur.nodeType === 1 && depth < 8) {
+      if (isSectionContainer(cur)) {
+        const headingLabel = cur.querySelector(
+          'h1 label, h2 label, h3 label, h4 label, h5 label, h6 label, legend, label.control-label'
+        );
+        if (headingLabel && !isOptionInputLabel(headingLabel)) {
+          const text = extractLabelText(headingLabel);
+          if (isValidLabelText(text)) return text;
+        }
+        const heading = cur.querySelector('h1, h2, h3, h4, h5, h6');
+        if (heading) {
+          const htext = heading.textContent.replace(/\s+/g, ' ').trim();
+          if (isValidLabelText(htext)) return htext;
+        }
+      }
+      cur = cur.parentElement;
+      depth++;
+    }
+
     return null;
   }
-  
+
+  /**
+   * True when a checkbox/radio is an item of an ASP.NET WebForms-style
+   * CheckBoxList / RadioButtonList: the defining signal is a <label for="<id>">
+   * whose `for` targets the ENCLOSING LIST container (<table>/<ul>/role=list…)
+   * or the option id with its trailing "_<index>" removed — i.e. the section
+   * label points at the LIST, not at an individual option input.
+   *
+   * Used to keep such checkboxes as independent per-box rows instead of folding
+   * them into a single comma-joined multi-select group. Genuine MS Forms /
+   * admin multi-select groups (whose section label has no `for`, or wraps the
+   * options) are NOT matched here, so their grouped behaviour is preserved.
+   */
+  function isAspNetListItem(el) {
+    if (!el || (el.type !== 'checkbox' && el.type !== 'radio')) return false;
+    const doc = el.ownerDocument || document;
+    const ids = [];
+    const listContainer = el.closest('table, ul, ol, [role="list"], [role="radiogroup"], [role="group"]');
+    if (listContainer && listContainer.id) ids.push(listContainer.id);
+    if (el.id) {
+      const m = el.id.match(/^(.*?)_\d+$/);
+      if (m && m[1]) ids.push(m[1]);
+    }
+    for (const id of ids) {
+      if (!id) continue;
+      let lab = null;
+      try { lab = doc.querySelector(`label[for="${CSS.escape(id)}"]`); } catch { lab = null; }
+      if (!lab || isOptionInputLabel(lab)) continue;
+      if (isValidLabelText(extractLabelText(lab))) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Field label for an INDEPENDENT checkbox (an ASP.NET CheckBoxList item, where
+   * each box has its own unique name and is tracked as its own row). When a
+   * section heading is found, combine it with the option text as
+   * "Section · Option"; otherwise return null so the caller keeps option-only.
+   */
+  const SECTION_OPTION_SEPARATOR = ' \u00B7 ';
+  function getIndependentChoiceFieldLabel(el, optionText) {
+    const section = getSectionHeadingLabel(el);
+    if (!section) return null;
+    const sectionClean = cleanLabel(section);
+    if (!sectionClean) return null;
+    const option = cleanLabel(optionText || '');
+    if (!option || sectionClean.toLowerCase() === option.toLowerCase()) {
+      return sectionClean;
+    }
+    return `${sectionClean}${SECTION_OPTION_SEPARATOR}${option}`;
+  }
+
   function getAssociatedLabelText(el) {
     if (el.id) {
       const labelEl = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
@@ -434,6 +906,9 @@
     if (el.type === 'checkbox' && !isForGroup) {
       label = getCheckboxGroupLabel(el);
       if (label) return cleanLabel(label);
+      // Independent checkbox (ASP.NET CheckBoxList item): "Section · Option".
+      const combined = getIndependentChoiceFieldLabel(el, getCheckboxOptionLabel(el));
+      if (combined) return combined;
     }
     
     label = getQuestionContainerLabel(el);
@@ -464,23 +939,17 @@
 
   function getFieldKey(el) {
     if (el.name) return `name:${el.name}`;
-    if (el.id) return `id:${el.id}`;
-    
-    const path = [];
-    let current = el;
-    while (current && current !== document.body) {
-      let tag = current.tagName.toLowerCase();
-      if (current.id) {
-        path.unshift(`#${current.id}`);
-        break;
-      }
-      const siblings = current.parentElement?.children || [];
-      const idx = Array.from(siblings).filter(s => s.tagName === current.tagName).indexOf(current);
-      if (idx > 0) tag += `:nth-of-type(${idx + 1})`;
-      path.unshift(tag);
-      current = current.parentElement;
+
+    // Nameless radios that belong to a question-root group share ONE key so the
+    // whole group is tracked as a single field (not one field per option).
+    if (el.type === 'radio') {
+      const root = getRadioRoot(el);
+      if (root) return `radio-group:${getDomPath(root)}`;
     }
-    return `path:${path.join('>')}`;
+
+    if (el.id) return `id:${el.id}`;
+
+    return `path:${getDomPath(el)}`;
   }
 
   function getRadioOptionLabel(radio) {
@@ -556,15 +1025,19 @@
     
     if (tag === 'input') {
       if (el.type === 'checkbox') {
-        const groupLabel = getCheckboxGroupLabel(el);
-        if (groupLabel) {
-          return el.checked ? getCheckboxOptionLabel(el) : '(unchecked)';
+        const group = getCheckboxGroupInputs(el);
+        if (group) {
+          const selected = [];
+          for (const cb of group.checkboxes) {
+            if (cb.checked) selected.push(getCheckboxOptionLabel(cb));
+          }
+          return selected.length > 0 ? selected.join(', ') : '(none selected)';
         }
         return el.checked ? 'Checked' : 'Unchecked';
       }
       if (el.type === 'radio') {
-        const name = el.name;
-        const checked = document.querySelector(`input[name="${CSS.escape(name)}"]:checked`);
+        const inputs = getRadioGroupInputs(el);
+        const checked = inputs.find(r => r.checked);
         if (checked) {
           return getRadioOptionLabel(checked);
         }
@@ -602,27 +1075,30 @@
     return results;
   }
 
+  /**
+   * Stable key base for a checkbox group: prefer the resolved question title so
+   * the key survives reloads; fall back to the question-root DOM path when the
+   * title can't be resolved (so the options are STILL grouped, never reported
+   * individually as Checked/Unchecked).
+   */
+  function getCheckboxGroupKeyBase(checkbox, group) {
+    const label = getCheckboxGroupLabel(checkbox);
+    if (label && label !== 'Unlabeled field') return label;
+    return getDomPath(group.root);
+  }
+
   function getCheckboxGroupKey(checkbox) {
-    const groupLabel = getCheckboxGroupLabel(checkbox);
-    if (!groupLabel) return null;
-    
-    const container = checkbox.closest('[class*="question"], [class*="Question"], [role="group"], fieldset, [class*="form-group"]');
-    if (container) {
-      const checkboxes = container.querySelectorAll('input[type="checkbox"]');
-      if (checkboxes.length > 1) {
-        return `checkbox-group:${groupLabel}`;
-      }
-    }
-    return null;
+    const group = getCheckboxGroupInputs(checkbox);
+    if (!group) return null;
+    return `checkbox-group:${getCheckboxGroupKeyBase(checkbox, group)}`;
   }
   
   function getCheckboxGroupValue(checkbox) {
-    const container = checkbox.closest('[class*="question"], [class*="Question"], [role="group"], fieldset, [class*="form-group"]');
-    if (!container) return checkbox.checked ? 'Checked' : 'Unchecked';
+    const group = getCheckboxGroupInputs(checkbox);
+    if (!group) return checkbox.checked ? 'Checked' : 'Unchecked';
     
-    const checkboxes = container.querySelectorAll('input[type="checkbox"]');
     const selected = [];
-    for (const cb of checkboxes) {
+    for (const cb of group.checkboxes) {
       if (cb.checked) {
         selected.push(getCheckboxOptionLabel(cb));
       }
@@ -647,8 +1123,11 @@
       if (!el.offsetParent && el.type !== 'hidden') continue;
       
       if (el.type === 'radio') {
-        if (seenRadios.has(el.name)) continue;
-        seenRadios.add(el.name);
+        // Dedupe by GROUP, not by raw name: nameless MS Forms radios still
+        // collapse to one row via their shared question-root key.
+        const radioKey = getFieldKey(el);
+        if (seenRadios.has(radioKey)) continue;
+        seenRadios.add(radioKey);
       }
       
       if (el.type === 'checkbox') {
@@ -666,7 +1145,7 @@
           fields.push({
             element: el,
             key: groupKey,
-            label: getCheckboxGroupLabel(el),
+            label: cleanLabel(getCheckboxGroupLabel(el)) || 'Unlabeled field',
             type: 'checkbox-group',
             value: getCheckboxGroupValue(el)
           });
@@ -1004,6 +1483,139 @@
     return str.length > len ? str.slice(0, len) + '…' : str;
   }
 
+  /**
+   * Guard so we never run more than one post-submit success watcher at a time.
+   */
+  let successWatcherActive = false;
+
+  /**
+   * Does the form (or page) still show outstanding validation errors?
+   *
+   * Covers native HTML5 constraint validation (`:invalid`) and common
+   * framework/ARIA error markers used by MS Forms, Google Forms, React, etc.
+   * If this is true, the submit clearly did NOT succeed and the user is still
+   * on the same form, so we must keep the baseline/detections.
+   */
+  function hasOutstandingValidationErrors(form) {
+    const scope = (form && document.contains(form)) ? form : document;
+    try {
+      if (scope.querySelector('input:invalid, select:invalid, textarea:invalid')) {
+        return true;
+      }
+    } catch {}
+    try {
+      if (scope.querySelector('[aria-invalid="true"]')) return true;
+    } catch {}
+    return false;
+  }
+
+  /**
+   * After a confirmed Save/Submit we must NOT assume the submit succeeded.
+   * Many submits fail (required field empty, server-side validation) and leave
+   * the user on the SAME form. Re-baselining in that case would wipe the user's
+   * Was/Now detections even though nothing was actually saved.
+   *
+   * Instead, watch for concrete evidence that the form actually succeeded or the
+   * user left it, and ONLY then re-baseline (which clears detections):
+   *   - the URL changes (SPA route change / navigation to a thank-you page)
+   *   - the submitted <form> is detached / replaced in the DOM
+   *   - every tracked field is detached and the form was replaced by non-form
+   *     success content (thank-you page), with no validation errors
+   *
+   * A full-page navigation tears down this content script entirely, so the fresh
+   * page gets a fresh baseline automatically; this watcher only needs to handle
+   * in-page (SPA / DOM-swap) success and, crucially, the "stayed on the same
+   * form" case where it deliberately does nothing.
+   *
+   * Soft SPA re-renders that keep an equivalent editable form are NOT treated as
+   * success: we require the editable fields to have (mostly) disappeared before
+   * clearing, so we never false-clear a form the user is still editing.
+   */
+  function watchForSubmitSuccess(contextForm) {
+    if (successWatcherActive) return;
+    successWatcherActive = true;
+
+    const startUrl = location.href;
+    const form = (contextForm && document.contains(contextForm)) ? contextForm : null;
+
+    const trackedEls = [];
+    for (const entry of baseline.values()) {
+      if (entry.element) trackedEls.push(entry.element);
+    }
+    const trackedCount = trackedEls.length;
+
+    const WATCH_MS = 6000;
+    const POLL_MS = 250;
+    const deadline = Date.now() + WATCH_MS;
+
+    let settled = false;
+    let pollTimer = null;
+
+    function finish(didLeaveOrSucceed) {
+      if (settled) return;
+      settled = true;
+      successWatcherActive = false;
+      if (pollTimer) clearInterval(pollTimer);
+      window.removeEventListener('pagehide', onPageHide, true);
+      // Only re-baseline (which clears detections) when the form truly left or
+      // succeeded. When the user stayed on the same form we intentionally do
+      // nothing, so Was/Now detections and Keep storage remain untouched.
+      if (didLeaveOrSucceed) {
+        snapshotBaseline();
+      }
+    }
+
+    // A real form-submit navigation fires pagehide and then tears down this
+    // script; stop polling so we don't act on a dying page. We do NOT clear on
+    // pagehide itself to avoid wiping detections for bfcache-restored forms.
+    function onPageHide() {
+      if (settled) return;
+      settled = true;
+      successWatcherActive = false;
+      if (pollTimer) clearInterval(pollTimer);
+      window.removeEventListener('pagehide', onPageHide, true);
+    }
+
+    function poll() {
+      if (settled) return;
+
+      // Strong signal: SPA route change / navigation to a different URL.
+      if (location.href !== startUrl) {
+        finish(true);
+        return;
+      }
+
+      // DOM-replacement signals. Guard against soft SPA re-renders that keep an
+      // equivalent editable form by requiring the editable fields to be (mostly)
+      // gone and no validation errors to be outstanding before we clear.
+      const formDetached = !!form && !document.contains(form);
+      let connected = 0;
+      for (const el of trackedEls) {
+        if (el && el.isConnected) connected++;
+      }
+      const allTrackedGone = trackedCount > 0 && connected === 0;
+
+      if ((formDetached || allTrackedGone) && !hasOutstandingValidationErrors(form)) {
+        const currentFieldCount = collectFields().length;
+        const replacedBySuccessContent =
+          currentFieldCount <= Math.max(1, Math.floor(trackedCount * 0.25));
+        if (replacedBySuccessContent) {
+          finish(true);
+          return;
+        }
+      }
+
+      if (Date.now() >= deadline) {
+        finish(false);
+      }
+    }
+
+    window.addEventListener('pagehide', onPageHide, true);
+    pollTimer = setInterval(poll, POLL_MS);
+    // Immediate check too, for very fast SPA transitions.
+    setTimeout(poll, 50);
+  }
+
   function handleSaveClick(e) {
     if (!saveInterceptEnabled) return;
     if (modalOpen) return;
@@ -1024,13 +1636,18 @@
       dirty,
       () => {
         saveInterceptEnabled = false;
+        // Capture the form context BEFORE we clear pendingSaveTarget so the
+        // success watcher can tell whether we actually left this form.
+        const contextForm = pendingSaveTarget ? pendingSaveTarget.closest('form') : null;
         if (pendingSaveTarget) {
           pendingSaveTarget.click();
         }
         setTimeout(() => {
           saveInterceptEnabled = true;
           pendingSaveTarget = null;
-          setTimeout(() => snapshotBaseline(), 500);
+          // Do NOT assume success. Only re-baseline if the form really leaves or
+          // succeeds; a failed submit (e.g. required field empty) keeps detections.
+          watchForSubmitSuccess(contextForm);
         }, 100);
       },
       () => {
@@ -1103,6 +1720,8 @@
         dirty,
         () => {
           saveInterceptEnabled = false;
+          // requestSubmit() re-runs HTML5 constraint validation, so a required
+          // empty field keeps the user on the same form and fires no navigation.
           if (form.requestSubmit) {
             form.requestSubmit();
           } else {
@@ -1110,7 +1729,9 @@
           }
           setTimeout(() => {
             saveInterceptEnabled = true;
-            setTimeout(() => snapshotBaseline(), 500);
+            // Do NOT assume success. Only re-baseline if the form really leaves or
+            // succeeds; a failed submit (e.g. required field empty) keeps detections.
+            watchForSubmitSuccess(form);
           }, 100);
         },
         () => {}
@@ -1179,6 +1800,59 @@
     const results = { applied: 0, failed: 0, total: changes.length, failures: [] };
     
     for (const change of changes) {
+      // Checkbox groups (multi-select) span multiple elements - handle specially.
+      // There is no single element to key on, so match by the group key/label.
+      if (isCheckboxGroupChange(change)) {
+        try {
+          const ok = applyCheckboxGroupChange(change);
+          if (ok) {
+            // Preserve "was" as baseline under the group key so it stays in the list
+            const groupEl = findCheckboxGroup(change)?.checkboxes?.[0] || null;
+            baseline.set(change.key, {
+              label: change.label,
+              type: change.type,
+              value: change.was,
+              element: groupEl
+            });
+            results.applied++;
+          } else {
+            results.failed++;
+            results.failures.push(change.label || change.key);
+          }
+        } catch (err) {
+          console.error('Failed to apply checkbox group:', change.key, err);
+          results.failed++;
+          results.failures.push(change.label || change.key);
+        }
+        continue;
+      }
+
+      // Nameless radio-groups also span multiple elements and have no single
+      // element to key on; match by question-root path / label.
+      if (isRadioGroupChange(change)) {
+        try {
+          const ok = applyRadioGroupChange(change);
+          if (ok) {
+            const groupEl = findRadioGroupInputs(change)?.[0] || null;
+            baseline.set(change.key, {
+              label: change.label,
+              type: change.type,
+              value: change.was,
+              element: groupEl
+            });
+            results.applied++;
+          } else {
+            results.failed++;
+            results.failures.push(change.label || change.key);
+          }
+        } catch (err) {
+          console.error('Failed to apply radio group:', change.key, err);
+          results.failed++;
+          results.failures.push(change.label || change.key);
+        }
+        continue;
+      }
+      
       const el = findFieldForChange(change);
       if (!el) {
         results.failed++;
@@ -1192,7 +1866,9 @@
         continue;
       }
       
-      // Set baseline to the "was" value so this field stays in dirty list
+      // Set baseline to the "was" value so this field stays in dirty list.
+      // getFieldKey returns name:<name> for radios (all options share the name),
+      // matching how collectFields keys the group.
       const fieldKey = getFieldKey(el);
       baseline.set(fieldKey, {
         label: change.label,
@@ -1231,6 +1907,25 @@
    * 4. Fallback to label text match
    */
   function applyOneChange(change) {
+    // Checkbox groups span multiple elements - handle specially
+    if (isCheckboxGroupChange(change)) {
+      try {
+        return applyCheckboxGroupChange(change);
+      } catch (err) {
+        console.error('Failed to apply checkbox group:', change.key, err);
+        return false;
+      }
+    }
+
+    if (isRadioGroupChange(change)) {
+      try {
+        return applyRadioGroupChange(change);
+      } catch (err) {
+        console.error('Failed to apply radio group:', change.key, err);
+        return false;
+      }
+    }
+    
     const el = findFieldForChange(change);
     if (!el) return false;
     
@@ -1322,33 +2017,209 @@
     return null;
   }
   
+  /**
+   * Set an input/textarea value via the native property setter so that
+   * framework-controlled inputs (React, etc.) actually register the change.
+   * React patches the element's value setter and tracks the last value it set;
+   * assigning el.value directly is ignored on re-render. Calling the native
+   * prototype setter bypasses that tracker so the dispatched input event sticks.
+   */
+  function setNativeValue(el, value) {
+    const v = value == null ? '' : value;
+    try {
+      const proto = el instanceof HTMLTextAreaElement
+        ? window.HTMLTextAreaElement.prototype
+        : window.HTMLInputElement.prototype;
+      const desc = Object.getOwnPropertyDescriptor(proto, 'value');
+      if (desc && desc.set) {
+        desc.set.call(el, v);
+        return;
+      }
+    } catch {}
+    el.value = v;
+  }
+
+  /**
+   * Set a checkbox/radio checked state via the native setter (React bypass).
+   */
+  function setNativeChecked(el, checked) {
+    try {
+      const desc = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'checked');
+      if (desc && desc.set) {
+        desc.set.call(el, checked);
+        return;
+      }
+    } catch {}
+    el.checked = checked;
+  }
+
+  /**
+   * Drive a checkbox/radio to a target checked state in a way that works for
+   * native inputs AND framework-controlled custom controls (Microsoft Forms,
+   * Google Forms, React, etc.).
+   *
+   * Strategy (stop as soon as the state matches the target):
+   * 1. Real click() on the input — fires the native toggle and the framework's
+   *    onClick/onChange, which is what MS Forms/React rely on.
+   * 2. Click the associated/wrapping <label> — some UIs wire the handler there.
+   * 3. Fallback: native setter + full synthetic event sequence.
+   */
+  function applyCheckedState(el, shouldCheck) {
+    if (el.checked === shouldCheck) return true;
+
+    try { el.focus?.(); } catch {}
+    try { el.click(); } catch {}
+    if (el.checked === shouldCheck) return true;
+
+    const label = (el.id && document.querySelector(`label[for="${CSS.escape(el.id)}"]`)) || el.closest('label');
+    if (label) {
+      try { label.click(); } catch {}
+      if (el.checked === shouldCheck) return true;
+    }
+
+    setNativeChecked(el, shouldCheck);
+    el.dispatchEvent(new Event('click', { bubbles: true }));
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+    return el.checked === shouldCheck;
+  }
+
+  /**
+   * Parse a stored multi-value string ("A, B, C") into a Set of option labels.
+   * Returns an empty Set for empty/placeholder markers.
+   */
+  function parseSelectedValues(stored) {
+    const set = new Set();
+    if (!stored) return set;
+    const trimmed = String(stored).trim();
+    if (EMPTY_VALUES.has(trimmed) || trimmed === '(none)') return set;
+    for (const part of trimmed.split(',')) {
+      const t = part.trim();
+      if (t) set.add(t);
+    }
+    return set;
+  }
+
+  /**
+   * Find the container + checkboxes for a checkbox-group change.
+   * Returns { container, checkboxes } or null if the group can't be located.
+   */
+  function findCheckboxGroup(change) {
+    const prefix = 'checkbox-group:';
+    const groupKeyBase = (change.key && change.key.startsWith(prefix))
+      ? change.key.slice(prefix.length)
+      : change.label;
+    if (!groupKeyBase) return null;
+
+    const allCheckboxes = deepQueryAll(document, 'input[type="checkbox"]');
+    for (const cb of allCheckboxes) {
+      if (!cb.offsetParent) continue;
+      if (shouldSkipField(cb)) continue;
+      const group = getCheckboxGroupInputs(cb);
+      if (!group) continue;
+      // Match on either the resolved label or the stable key base (path),
+      // so groups whose title can't be resolved still reapply.
+      const label = getCheckboxGroupLabel(cb);
+      const keyBase = getCheckboxGroupKeyBase(cb, group);
+      if (label === groupKeyBase || keyBase === groupKeyBase) {
+        return { container: group.root, checkboxes: group.checkboxes };
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Apply a checkbox-group (multi-select) change: check options whose label
+   * (or value) is in the stored "now" set, uncheck the rest.
+   */
+  function applyCheckboxGroupChange(change) {
+    const group = findCheckboxGroup(change);
+    if (!group) return false;
+
+    const desired = parseSelectedValues(change.now);
+    for (const cb of group.checkboxes) {
+      const optLabel = getCheckboxOptionLabel(cb);
+      const shouldCheck = desired.has(optLabel) || desired.has(cb.value);
+      applyCheckedState(cb, shouldCheck);
+    }
+    return true;
+  }
+
+  function isCheckboxGroupChange(change) {
+    return change.type === 'checkbox-group' ||
+      (typeof change.key === 'string' && change.key.startsWith('checkbox-group:'));
+  }
+
+  function isRadioGroupChange(change) {
+    return typeof change.key === 'string' && change.key.startsWith('radio-group:');
+  }
+
+  /**
+   * Locate the radios for a nameless radio-group change (keyed by question-root
+   * DOM path). Falls back to matching the resolved group label.
+   */
+  function findRadioGroupInputs(change) {
+    const prefix = 'radio-group:';
+    const pathOrLabel = change.key && change.key.startsWith(prefix)
+      ? change.key.slice(prefix.length)
+      : change.label;
+    if (pathOrLabel) {
+      try {
+        const root = document.querySelector(pathOrLabel);
+        if (root) {
+          const radios = Array.from(root.querySelectorAll('input[type="radio"]'));
+          if (radios.length) return radios;
+        }
+      } catch {}
+    }
+    const allRadios = deepQueryAll(document, 'input[type="radio"]');
+    for (const r of allRadios) {
+      if (!r.offsetParent) continue;
+      if (shouldSkipField(r)) continue;
+      if (getRadioGroupLabel(r) === change.label) {
+        const root = getRadioRoot(r);
+        if (root) return Array.from(root.querySelectorAll('input[type="radio"]'));
+      }
+    }
+    return null;
+  }
+
+  function applyRadioGroupChange(change) {
+    const radios = findRadioGroupInputs(change);
+    if (!radios || radios.length === 0) return false;
+    const target = String(change.now).trim();
+    for (const radio of radios) {
+      if (getRadioOptionLabel(radio) === target || radio.value === target) {
+        return applyCheckedState(radio, true);
+      }
+    }
+    return false;
+  }
+
   function setFieldValue(el, value, type) {
     const tag = el.tagName.toLowerCase();
     
     if (tag === 'input') {
       if (el.type === 'checkbox') {
-        const shouldCheck = value === 'Checked' || value === true;
-        if (el.checked !== shouldCheck) {
-          el.checked = shouldCheck;
-          el.dispatchEvent(new Event('change', { bubbles: true }));
-        }
-        return true;
+        // Single checkbox: stored value is "Checked" / option label (checked) vs unchecked markers
+        const nowEmpty = isEmptyValue(value);
+        const shouldCheck = !nowEmpty && value !== 'Unchecked';
+        return applyCheckedState(el, shouldCheck);
       }
       
       if (el.type === 'radio') {
-        const radios = document.querySelectorAll(`input[name="${CSS.escape(el.name)}"]`);
+        const radios = getRadioGroupInputs(el);
         for (const radio of radios) {
           const optionLabel = getRadioOptionLabel(radio);
           if (optionLabel === value || radio.value === value) {
-            radio.checked = true;
-            radio.dispatchEvent(new Event('change', { bubbles: true }));
-            return true;
+            return applyCheckedState(radio, true);
           }
         }
         return false;
       }
       
-      el.value = value || '';
+      // Text-like inputs: native setter + input/change for framework compatibility
+      setNativeValue(el, value || '');
       el.dispatchEvent(new Event('input', { bubbles: true }));
       el.dispatchEvent(new Event('change', { bubbles: true }));
       return true;
@@ -1356,19 +2227,22 @@
     
     if (tag === 'select') {
       if (el.multiple) {
-        const values = (value || '').split(', ');
+        const desired = parseSelectedValues(value);
         let anyMatched = false;
         for (const opt of el.options) {
-          const shouldSelect = values.includes(opt.text) || values.includes(opt.value);
+          const shouldSelect = desired.has(opt.text) || desired.has(opt.value) ||
+            desired.has((opt.text || '').trim());
           opt.selected = shouldSelect;
           if (shouldSelect) anyMatched = true;
         }
+        el.dispatchEvent(new Event('input', { bubbles: true }));
         el.dispatchEvent(new Event('change', { bubbles: true }));
         return anyMatched;
       } else {
         for (const opt of el.options) {
-          if (opt.text === value || opt.value === value) {
-            el.value = opt.value;
+          if (opt.text === value || opt.value === value || (opt.text || '').trim() === value) {
+            setNativeValue(el, opt.value);
+            el.dispatchEvent(new Event('input', { bubbles: true }));
             el.dispatchEvent(new Event('change', { bubbles: true }));
             return true;
           }
@@ -1378,7 +2252,7 @@
     }
     
     if (tag === 'textarea') {
-      el.value = value || '';
+      setNativeValue(el, value || '');
       el.dispatchEvent(new Event('input', { bubbles: true }));
       el.dispatchEvent(new Event('change', { bubbles: true }));
       return true;
@@ -1387,6 +2261,7 @@
     if (el.isContentEditable) {
       el.innerText = value || '';
       el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
       return true;
     }
     
@@ -1475,6 +2350,31 @@
     setupInputListeners();
     setupSaveIntercept();
     setupMutationObserver();
+  }
+
+  /**
+   * Test-only hook. Exposes internal label/value/apply functions to an
+   * automated jsdom harness ONLY when window.__CHANGEPREVIEW_TEST__ is set.
+   * This has no effect in the extension (the flag is never set in production).
+   */
+  if (typeof window !== 'undefined' && window.__CHANGEPREVIEW_TEST__) {
+    window.__changePreviewInternals = {
+      collectFields,
+      getDirtyFields,
+      snapshotBaseline,
+      applyChangesWithBaseline,
+      applyOneChange,
+      getFieldLabel,
+      getFieldValue,
+      getFieldKey,
+      cleanLabel,
+      stripLeadingOrdinal,
+      getRadioGroupLabel,
+      getCheckboxGroupLabel,
+      getSectionHeadingLabel,
+      isAspNetListItem,
+      getBaseline: () => baseline
+    };
   }
 
   init();
