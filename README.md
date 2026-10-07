@@ -4,7 +4,9 @@
 
 ChangePreview is a Chrome extension that snapshots form fields when you load a page, then shows you a clear "Field | Was | Now" diff before you hit Save. Copy the changes as Markdown or CSV for your CAB tickets, Slack threads, or Jira issues.
 
-> Chrome Web Store listing copy (name, descriptions, category, privacy practices, pricing note) lives in [`store/chrome-web-store.md`](store/chrome-web-store.md).
+> Chrome Web Store listing copy (name, descriptions, category, privacy practices, free / IAP = No) lives in [`store/chrome-web-store.md`](store/chrome-web-store.md).
+
+ChangePreview is **free**. Every feature works with no license key, Buy button, or payment.
 
 ## Features
 
@@ -178,32 +180,11 @@ This is a Manifest V3 Chrome extension. The structure is:
     └── aspnet-checkboxlist.html # ASP.NET CheckBoxList/RadioButtonList test page
 ```
 
-## Paid Unlock
+## Free
 
-ChangePreview is **free to install**. Preview mode (seeing what changed) works without a license.
+ChangePreview is fully free. There is no payment, license key, unlock screen, or in-app purchase. Keep after reload, Reapply, Clear, export, click-to-highlight, and Confirm on save all work as soon as you load the extension.
 
-**Full features require a €9.99 one-time purchase:**
-- Keep changes after reload
-- Reapply saved changes
-- Clear detections
-- Export to Markdown & CSV
-
-The purchase is handled via Stripe, sold by **NextGen Folks** (not Google).
-
-### License API
-
-The license server is a Cloudflare Worker in the `worker/` directory. See [`worker/README.md`](worker/README.md) for deployment instructions.
-
-**Required setup for deployment:**
-1. Create Cloudflare KV namespace
-2. Set secrets:
-   - `STRIPE_SECRET_KEY` — Stripe API key
-   - `STRIPE_WEBHOOK_SECRET` — Stripe webhook signing secret
-   - `ENGINEMAILER_API_KEY` — Enginemailer API key for license emails
-3. Deploy with `wrangler deploy`
-4. Create Stripe Payment Link (€9.99 one-time)
-5. Configure Stripe webhook to point to `/stripe/webhook`
-6. Update `panel/config.js` with your worker URL and Payment Link URL
+The `worker/` directory is **legacy / unused**. It is leftover Stripe + Cloudflare Worker license-API code kept as archived reference. The shipped extension does not call it.
 
 ## License
 
