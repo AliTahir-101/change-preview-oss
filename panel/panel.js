@@ -125,6 +125,63 @@ function getPageKey(source) {
   return `https://${host}${path}`;
 }
 
+/**
+ * Strip the ephemeral `frame:<uid>:` prefix. Iframe remounts mint a new UID, so
+ * Keep/restore must identity fields without it or the same change stacks as
+ * several rows across reloads.
+ */
+function logicalFieldKey(key) {
+  return typeof key === 'string' ? key.replace(/^frame:[^:]+:/, '') : '';
+}
+
+/**
+ * Collapse dirty rows that represent the same logical field (last wins).
+ * When stripFramePrefix is set (Keep save/restore), stored keys drop the
+ * ephemeral frame UID so a later reload cannot resurrect N copies.
+ */
+function dedupeDirtyFields(dirty, { stripFramePrefix = false } = {}) {
+  const seen = new Map();
+  for (const f of Array.isArray(dirty) ? dirty : []) {
+    if (!f || typeof f.key !== 'string') continue;
+    const logical = logicalFieldKey(f.key);
+    if (!logical) continue;
+    seen.set(logical, stripFramePrefix ? { ...f, key: logical } : { ...f });
+  }
+  return Array.from(seen.values());
+}
+
+function getCanonicalStorageKey(pageKey) {
+  return STORAGE_PREFIX + (pageKey || '');
+}
+
+function pageKeyHostPath(pageKey) {
+  try {
+    const u = new URL(pageKey);
+    return { host: u.host, path: (u.pathname || '/').replace(/\/+$/, '') || '/' };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * True when a chrome.storage.local entry is a Keep snapshot for this page —
+ * the canonical 0.3.7+ key, a 0.3.3–0.3.6 `<pageKey>#<hash>` key, or a
+ * pre-0.3.3 host+path key for the same host/path.
+ */
+function isDetectionKeyForPage(key, value, pageKey) {
+  if (!pageKey || typeof key !== 'string' || !key.startsWith(STORAGE_PREFIX)) return false;
+  if ((value?.pageKey || '') === pageKey) return true;
+  const canon = getCanonicalStorageKey(pageKey);
+  if (key === canon || key.startsWith(`${canon}#`)) return true;
+  const hp = pageKeyHostPath(pageKey);
+  if (!hp) return false;
+  const valueHost = value?.host || '';
+  const valuePath = (value?.path || '/').replace(/\/+$/, '') || '/';
+  if (valueHost === hp.host && valuePath === hp.path) return true;
+  const legacyPrefix = STORAGE_PREFIX + hp.host + hp.path;
+  return key === legacyPrefix || key.startsWith(`${legacyPrefix}#`);
+}
+
 let currentData = null;
 let persistEnabled = false;
 
@@ -674,13 +731,12 @@ async function refreshData(explicitTabId) {
       // justReloaded must be true - meaning no live edits detected this session yet
       // If user edited and then undid, justReloaded is false → clean state, not Reapply
       if (persistEnabled && !liveHasChanges && justReloaded && !isCleared() && !pageCleared && !panelClearedSession) {
-        let persisted = await loadPersistedDetections(newFingerprint);
-        if (!persisted) {
-          const fallback = await loadPersistedByPageKey(pageKey);
-          if (fallback?.data) {
-            persisted = fallback.data;
-          }
-        }
+        // Always load by canonical pageKey (not the field-hash fingerprint). The
+        // hash used to change whenever an iframe remounted, which left several
+        // snapshots for one form; loading by pageKey + picking newest +
+        // collapsing siblings is idempotent.
+        const fallback = await loadPersistedByPageKey(pageKey);
+        const persisted = fallback?.data;
         
         if (persisted?.dirty?.length > 0) {
           persistedData = persisted;
@@ -781,12 +837,14 @@ function hideConfirmDialog() {
 }
 
 /**
- * Form fingerprint: creates a durable identity for persisted detections.
- * Uses origin + normalized pathname + field signature hash.
- * Field signature = sorted list of field keys, hashed for compactness.
+ * In-memory form fingerprint (page + field-set). Storage itself is keyed only
+ * by canonical pageKey (one Keep snapshot per form page); this hash is kept as
+ * metadata so a field-set change is still observable, but it must not split
+ * snapshots — iframe UID churn used to mint a new `<pageKey>#<hash>` key on
+ * every remount and stack duplicate rows across Keep+reload.
  */
 function createFingerprint(pageKey, fieldKeys) {
-  const keySignature = (fieldKeys || []).slice().sort().join('|');
+  const keySignature = (fieldKeys || []).map(logicalFieldKey).filter(Boolean).slice().sort().join('|');
   const hash = simpleHash(keySignature);
   return `${pageKey || ''}#${hash}`;
 }
@@ -820,17 +878,39 @@ async function loadPersistedDetections(fingerprint) {
 async function loadPersistedByPageKey(pageKey) {
   if (!pageKey) return null;
   try {
-    const prefix = STORAGE_PREFIX + pageKey + '#';
     const all = await chrome.storage.local.get(null);
-    
+    const candidates = [];
     for (const [key, value] of Object.entries(all)) {
-      // Match by the stored canonical page key (authoritative) or the storage
-      // key prefix (fingerprint is `<pageKey>#<hash>`).
-      if ((value?.pageKey || '') === pageKey || key.startsWith(prefix)) {
-        return { key, data: value };
+      if (isDetectionKeyForPage(key, value, pageKey) && value?.dirty?.length > 0) {
+        candidates.push({ key, data: value });
       }
     }
-    return null;
+    if (!candidates.length) return null;
+
+    candidates.sort((a, b) => (b.data.savedAt || 0) - (a.data.savedAt || 0));
+    const best = candidates[0];
+    const dirty = dedupeDirtyFields(best.data.dirty, { stripFramePrefix: true });
+    const pageKeyHost = pageKeyHostPath(pageKey);
+    const migrated = {
+      ...best.data,
+      pageKey,
+      host: best.data.host || pageKeyHost?.host,
+      path: best.data.path || pageKeyHost?.path,
+      dirty
+    };
+
+    const canon = getCanonicalStorageKey(pageKey);
+    const extras = candidates.map((c) => c.key).filter((k) => k !== canon);
+    if (best.key !== canon) {
+      await chrome.storage.local.set({ [canon]: migrated });
+    } else if (dirty.length !== (best.data.dirty || []).length) {
+      await chrome.storage.local.set({ [canon]: migrated });
+    }
+    if (extras.length > 0) {
+      await chrome.storage.local.remove(extras);
+    }
+
+    return { key: canon, data: migrated };
   } catch (err) {
     console.error('Failed to load persisted by page key:', err);
     return null;
@@ -840,25 +920,38 @@ async function loadPersistedByPageKey(pageKey) {
 async function saveDetections(data, fingerprint) {
   if (!persistEnabled || !fingerprint || !data?.dirty?.length) return;
   try {
-    const key = getStorageKey(fingerprint);
+    const pageKey = getPageKey(data);
+    if (!pageKey) return;
+    const dirty = dedupeDirtyFields(data.dirty, { stripFramePrefix: true }).map((f) => ({
+      key: f.key,
+      label: f.label,
+      type: f.type,
+      was: f.was,
+      now: f.now
+    }));
+    if (!dirty.length) return;
+
+    const key = getCanonicalStorageKey(pageKey);
     const toStore = {
       fingerprint: fingerprint,
       // Canonical identity for this form page (origin + path + meaningful query).
-      pageKey: getPageKey(data),
+      pageKey,
       // host/path retained for the header display of restored data.
       host: data.host,
       path: data.path,
-      dirty: data.dirty.map(f => ({
-        key: f.key,
-        label: f.label,
-        type: f.type,
-        was: f.was,
-        now: f.now
-      })),
+      dirty,
       savedAt: Date.now()
     };
     await chrome.storage.local.set({ [key]: toStore });
     persistedData = toStore;
+
+    // One snapshot per page: drop hash-suffixed / legacy host+path siblings so
+    // Keep+reload cannot stack them as extra rows.
+    const all = await chrome.storage.local.get(null);
+    const extras = Object.keys(all).filter((k) => k !== key && isDetectionKeyForPage(k, all[k], pageKey));
+    if (extras.length > 0) {
+      await chrome.storage.local.remove(extras);
+    }
   } catch (err) {
     console.error('Failed to save detections:', err);
   }
@@ -866,37 +959,28 @@ async function saveDetections(data, fingerprint) {
 
 /**
  * Aggressively clear ALL detection storage keys for a page.
- * Uses multiple matching strategies to ensure no leftovers:
- * 1. Current fingerprint key
- * 2. Keys with the canonical page-key prefix (`<pageKey>#…`)
- * 3. Keys where the stored value.pageKey matches this page
- * 4. Set persistent cleared marker
+ * Matches the canonical pageKey slot, hash-suffixed 0.3.3–0.3.6 keys, and
+ * legacy host+path keys, then sets the persistent cleared marker.
  */
 async function clearPersistedDetections(pageKey) {
   try {
     const keysToRemove = [];
     
-    // Strategy 1: Current fingerprint
+    // Strategy 1: Current fingerprint (may still be a hash-suffixed key)
     if (currentFingerprint) {
       keysToRemove.push(getStorageKey(currentFingerprint));
+    }
+    if (pageKey) {
+      keysToRemove.push(getCanonicalStorageKey(pageKey));
     }
     
     // Get all storage
     const all = await chrome.storage.local.get(null);
     
     if (pageKey) {
-      // Strategy 2: Key prefix matching (fingerprint is `<pageKey>#<hash>`).
-      const prefix = STORAGE_PREFIX + pageKey + '#';
-      
       for (const [key, value] of Object.entries(all)) {
-        if (!key.startsWith(STORAGE_PREFIX)) continue;
         if (keysToRemove.includes(key)) continue;
-        
-        // Prefix match on the canonical page key, or exact stored page key match.
-        const matchesPrefix = key.startsWith(prefix);
-        const matchesValue = (value?.pageKey || '') === pageKey;
-        
-        if (matchesPrefix || matchesValue) {
+        if (isDetectionKeyForPage(key, value, pageKey)) {
           keysToRemove.push(key);
         }
       }
@@ -1571,6 +1655,14 @@ if (typeof window !== 'undefined' && window.__CHANGEPREVIEW_TEST__) {
     getPageKey,
     createFingerprint,
     isTrackingParam,
+    logicalFieldKey,
+    dedupeDirtyFields,
+    getCanonicalStorageKey,
+    isDetectionKeyForPage,
+    saveDetections,
+    loadPersistedByPageKey,
+    setPersistEnabled(enabled) { persistEnabled = !!enabled; },
+    getPersistedData() { return persistedData; },
   };
 } else {
   init();
