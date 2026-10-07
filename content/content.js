@@ -1569,9 +1569,126 @@
     snapshotBaseline(true);
   }
 
+  /* ---------------------- Reveal / highlight a field ---------------------- */
+
+  // Single reusable highlight overlay for this frame. Position:fixed box drawn
+  // over the field's rect; never mutates the control, pointer-events:none, so it
+  // can't break page interactions. Host-page CSS can't affect it (inline styles).
+  let revealOverlay = null;
+  let revealFadeTimer = null;
+  let revealTrackTimer = null;
+
+  function removeRevealOverlay() {
+    clearTimeout(revealFadeTimer);
+    clearInterval(revealTrackTimer);
+    revealFadeTimer = null;
+    revealTrackTimer = null;
+    if (revealOverlay) {
+      try { revealOverlay.remove(); } catch {}
+      revealOverlay = null;
+    }
+  }
+
+  function ensureRevealOverlay() {
+    if (revealOverlay && revealOverlay.isConnected) return revealOverlay;
+    const o = document.createElement('div');
+    o.setAttribute('data-changepreview-reveal', '');
+    const s = o.style;
+    s.position = 'fixed';
+    s.zIndex = '2147483646';
+    s.pointerEvents = 'none';
+    s.boxSizing = 'border-box';
+    s.border = '2px solid #e67e22';
+    s.borderRadius = '6px';
+    s.boxShadow = '0 0 0 3px rgba(230,126,34,0.35), 0 0 14px 3px rgba(230,126,34,0.55)';
+    s.background = 'rgba(230,126,34,0.10)';
+    s.transition = 'opacity 180ms ease';
+    s.opacity = '0';
+    (document.body || document.documentElement).appendChild(o);
+    revealOverlay = o;
+    return o;
+  }
+
+  function positionRevealOverlay(el) {
+    let rect;
+    try { rect = el.getBoundingClientRect(); } catch { return; }
+    const o = ensureRevealOverlay();
+    const pad = 4;
+    o.style.left = (rect.left - pad) + 'px';
+    o.style.top = (rect.top - pad) + 'px';
+    o.style.width = (rect.width + pad * 2) + 'px';
+    o.style.height = (rect.height + pad * 2) + 'px';
+    o.style.opacity = '1';
+  }
+
+  // Re-resolve the live element for a key (the DOM may have re-rendered since the
+  // baseline was taken). Generic: re-scans fields and matches by key.
+  function resolveElementForKey(key) {
+    const entry = baseline.get(key);
+    let el = entry && entry.element;
+    if (el && el.isConnected) return el;
+    try {
+      for (const f of collectFields()) {
+        if (f.key === key && f.element && f.element.isConnected) {
+          if (entry) entry.element = f.element;
+          return f.element;
+        }
+      }
+    } catch {}
+    return null;
+  }
+
+  function maybeFocusField(el) {
+    // Focus only simple text-like controls, and never scroll via focus (we scroll
+    // ourselves). Avoid focusing checkbox/radio/select/file/date which can trigger
+    // pickers or destructive side effects on some pages.
+    try {
+      const tag = (el.tagName || '').toLowerCase();
+      const type = (el.type || '').toLowerCase();
+      const focusableText = tag === 'textarea' || el.isContentEditable ||
+        (tag === 'input' && ['text', 'email', 'search', 'url', 'tel', 'number', 'password', ''].includes(type));
+      if (focusableText) el.focus({ preventScroll: true });
+    } catch {}
+  }
+
+  /**
+   * Scroll to and briefly highlight the field for `key` in THIS frame.
+   * Returns true if a live element was found and highlighted.
+   */
+  function revealFieldLocal(key) {
+    const el = resolveElementForKey(key);
+    if (!el) return false;
+
+    try {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+    } catch {
+      try { el.scrollIntoView(); } catch {}
+    }
+
+    removeRevealOverlay();
+    positionRevealOverlay(el);
+    maybeFocusField(el);
+
+    // Track the element for a moment so the ring follows the smooth-scroll, then
+    // fade out. A subsequent reveal cancels this and starts fresh.
+    let ticks = 0;
+    revealTrackTimer = setInterval(() => {
+      ticks++;
+      positionRevealOverlay(el);
+      if (ticks >= 8) { clearInterval(revealTrackTimer); revealTrackTimer = null; }
+    }, 80);
+
+    revealFadeTimer = setTimeout(() => {
+      if (revealOverlay) revealOverlay.style.opacity = '0';
+      revealFadeTimer = setTimeout(removeRevealOverlay, 220);
+    }, 1800);
+
+    return true;
+  }
+
   /**
    * Handle cross-frame messages. The top frame aggregates sub-frame detections;
-   * every frame relays panel commands (currently just CLEAR) down the tree.
+   * every frame relays panel commands (CLEAR, REVEAL) down the tree.
    *
    * Messages are only trusted when tagged with CP_FRAME_TAG and not sent by this
    * same window. This is local-only display/baseline coordination (no data ever
@@ -1605,6 +1722,11 @@
       if (d.cmd === 'CLEAR') {
         clearBaselineLocal();
         postReportToTop('FIELDS');
+      } else if (d.cmd === 'REVEAL') {
+        // Reveal only if the (namespaced) key belongs to this frame.
+        if (typeof d.key === 'string' && d.key.startsWith(FRAME_KEY_PREFIX)) {
+          revealFieldLocal(d.key.slice(FRAME_KEY_PREFIX.length));
+        }
       }
       // Relay further down so deeply-nested frames also receive the command.
       broadcastCommandToChildFrames(d);
@@ -2780,6 +2902,30 @@
         saveInterceptEnabled = message.enabled;
         sendResponse({ success: true });
         break;
+
+      case 'REVEAL_FIELD': {
+        /**
+         * Scroll to + highlight the field for a clicked panel row. Sub-frame rows
+         * carry a `frame:<uid>:` key; forward the reveal down the frame tree so the
+         * owning same-origin frame highlights it. Cross-origin frames simply never
+         * receive/act on it (fail soft).
+         */
+        const key = message.key;
+        if (isFrameNamespacedKey(key)) {
+          broadcastCommandToChildFrames({
+            [CP_FRAME_TAG]: true,
+            kind: 'CMD',
+            cmd: 'REVEAL',
+            key,
+            cmdId: newCommandId()
+          });
+          sendResponse({ success: true, forwarded: true });
+        } else {
+          const found = revealFieldLocal(key);
+          sendResponse({ success: true, found });
+        }
+        break;
+      }
         
       case 'APPLY_CHANGES':
         /**
@@ -2888,6 +3034,7 @@
       pruneStaleSubFrames,
       handleFrameMessage,
       clearBaselineLocal,
+      revealFieldLocal,
       getSubFrameReports: () => subFrameReports
     };
   }
