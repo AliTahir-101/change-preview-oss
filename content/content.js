@@ -66,6 +66,16 @@
     'i'
   );
 
+  /**
+   * Container selectors that bound a checkbox/radio "group" (one question with
+   * several options). Kept in a single constant so detection (collectFields),
+   * value reading, and Reapply (findCheckboxGroup) all agree on the boundary.
+   */
+  const CHECKBOX_GROUP_CONTAINER_SELECTOR =
+    '[class*="question"], [class*="Question"], [role="group"], fieldset, [class*="form-group"]';
+  const RADIO_GROUP_CONTAINER_SELECTOR =
+    '[class*="question"], [class*="Question"], [role="group"], [role="radiogroup"], fieldset, [class*="form-group"]';
+
   let baseline = new Map();
   let radioGroupLabels = new Map();
   let checkboxGroupLabels = new Map();
@@ -257,6 +267,80 @@
     return null;
   }
   
+  /**
+   * Derive the GROUP question title for a set of checkbox/radio options when the
+   * title is a plain heading/label that sits alongside the options rather than
+   * inside a recognised "question-title" container.
+   *
+   * This is the common "House type" / admin-settings pattern:
+   *   <div class="form-group">
+   *     <label>House type</label>            <-- group question (what we want)
+   *     <div class="checkbox-group">
+   *       <label><input type="checkbox"> Block of flats</label>  <-- option label
+   *       ...
+   *
+   * We deliberately EXCLUDE each option's own label (via <label for> / wrapping
+   * <label>) so we never return an individual option ("Block of flats") as the
+   * group title. Prefers explicit group semantics (aria-labelledby/-label,
+   * legend) before falling back to a bare label/heading.
+   *
+   * @param {Element} container  the element that bounds the whole group
+   * @param {Element[]} groupInputs  the option inputs inside the group
+   * @returns {string|null}
+   */
+  function getBareGroupLabel(container, groupInputs) {
+    if (!container) return null;
+
+    const labelledBy = container.getAttribute && container.getAttribute('aria-labelledby');
+    if (labelledBy) {
+      const texts = [];
+      for (const id of labelledBy.split(/\s+/)) {
+        const le = document.getElementById(id);
+        if (le) texts.push(le.textContent.trim());
+      }
+      const combined = texts.join(' ').trim();
+      if (isValidLabelText(combined)) return combined;
+    }
+
+    const ariaLabel = container.getAttribute && container.getAttribute('aria-label');
+    if (ariaLabel && isValidLabelText(ariaLabel)) return ariaLabel;
+
+    const legend = container.querySelector('legend');
+    if (legend && isValidLabelText(legend.textContent.trim())) {
+      return legend.textContent.trim();
+    }
+
+    // Build the set of elements that are an option's OWN label, so we can skip
+    // them and never mistake an option for the group question.
+    const optionLabels = new Set();
+    for (const inp of groupInputs) {
+      if (inp.id) {
+        const l = container.querySelector(`label[for="${CSS.escape(inp.id)}"]`);
+        if (l) optionLabels.add(l);
+      }
+      const wrap = inp.closest('label');
+      if (wrap) optionLabels.add(wrap);
+    }
+
+    const groupInputIds = new Set(groupInputs.map(i => i.id).filter(Boolean));
+    const labels = container.querySelectorAll('label');
+    for (const lab of labels) {
+      if (optionLabels.has(lab)) continue;
+      if (lab.querySelector('input, select, textarea')) continue;
+      const forId = lab.getAttribute('for');
+      if (forId && groupInputIds.has(forId)) continue;
+      const text = lab.textContent.trim();
+      if (isValidLabelText(text)) return text;
+    }
+
+    const heading = container.querySelector('h1, h2, h3, h4, h5, h6, [role="heading"]');
+    if (heading && isValidLabelText(heading.textContent.trim())) {
+      return heading.textContent.trim();
+    }
+
+    return null;
+  }
+
   function getRadioGroupLabel(el) {
     if (el.type !== 'radio') return null;
     const name = el.name;
@@ -303,6 +387,16 @@
       return questionLabel;
     }
     
+    const container = firstRadio.closest(RADIO_GROUP_CONTAINER_SELECTOR);
+    if (container) {
+      const groupRadios = Array.from(container.querySelectorAll('input[type="radio"]'));
+      const bare = getBareGroupLabel(container, groupRadios);
+      if (bare) {
+        radioGroupLabels.set(name, bare);
+        return bare;
+      }
+    }
+    
     return null;
   }
   
@@ -317,6 +411,18 @@
     const legendLabel = getLegendOrFieldsetLabel(el);
     if (legendLabel) {
       return legendLabel;
+    }
+    
+    // Fall back to a group-level heading/label alongside the options (the common
+    // admin-settings / "House type" pattern) but only when this really is a
+    // multi-option group, so a lone checkbox keeps its own option label.
+    const container = el.closest(CHECKBOX_GROUP_CONTAINER_SELECTOR);
+    if (container) {
+      const checkboxes = Array.from(container.querySelectorAll('input[type="checkbox"]'));
+      if (checkboxes.length > 1) {
+        const bare = getBareGroupLabel(container, checkboxes);
+        if (bare) return bare;
+      }
     }
     
     return null;
@@ -606,7 +712,7 @@
     const groupLabel = getCheckboxGroupLabel(checkbox);
     if (!groupLabel) return null;
     
-    const container = checkbox.closest('[class*="question"], [class*="Question"], [role="group"], fieldset, [class*="form-group"]');
+    const container = checkbox.closest(CHECKBOX_GROUP_CONTAINER_SELECTOR);
     if (container) {
       const checkboxes = container.querySelectorAll('input[type="checkbox"]');
       if (checkboxes.length > 1) {
@@ -617,7 +723,7 @@
   }
   
   function getCheckboxGroupValue(checkbox) {
-    const container = checkbox.closest('[class*="question"], [class*="Question"], [role="group"], fieldset, [class*="form-group"]');
+    const container = checkbox.closest(CHECKBOX_GROUP_CONTAINER_SELECTOR);
     if (!container) return checkbox.checked ? 'Checked' : 'Unchecked';
     
     const checkboxes = container.querySelectorAll('input[type="checkbox"]');
@@ -666,7 +772,7 @@
           fields.push({
             element: el,
             key: groupKey,
-            label: getCheckboxGroupLabel(el),
+            label: cleanLabel(getCheckboxGroupLabel(el)),
             type: 'checkbox-group',
             value: getCheckboxGroupValue(el)
           });
@@ -1602,7 +1708,7 @@
       if (!cb.offsetParent) continue;
       if (shouldSkipField(cb)) continue;
       if (getCheckboxGroupLabel(cb) === groupLabel) {
-        const container = cb.closest('[class*="question"], [class*="Question"], [role="group"], fieldset, [class*="form-group"]');
+        const container = cb.closest(CHECKBOX_GROUP_CONTAINER_SELECTOR);
         if (container) {
           const checkboxes = Array.from(container.querySelectorAll('input[type="checkbox"]'));
           if (checkboxes.length > 0) return { container, checkboxes };
