@@ -17,6 +17,55 @@
   const SAVE_BUTTON_PATTERN = /^(save|update|submit|apply|publish|confirm|create|add|store)$/i;
   const SAVE_BUTTON_CONTAINS = /(save|update|submit|apply|publish|confirm)\s*(changes?|settings?|form)?/i;
   
+  /**
+   * Hosts where save/submit intercept is disabled entirely.
+   * These are sensitive payment/admin dashboards where intercepting buttons
+   * could block critical user flows (onboarding, checkout, account management).
+   * The extension still tracks fields silently; it just won't show confirm modals.
+   */
+  const INTERCEPT_DENYLIST_HOSTS = [
+    'dashboard.stripe.com',
+    'connect.stripe.com',
+    'billing.stripe.com',
+    'stripe.com',
+    'paypal.com',
+    'www.paypal.com',
+    'braintreegateway.com',
+    'square.com',
+    'squareup.com',
+    'checkout.com',
+    'adyen.com',
+    'authorize.net',
+    'pay.google.com',
+    'wallet.google.com',
+    'appleid.apple.com',
+    'idmsa.apple.com',
+  ];
+  
+  /**
+   * Host patterns (regex) for broader matching (e.g., subdomains).
+   */
+  const INTERCEPT_DENYLIST_PATTERNS = [
+    /\.stripe\.com$/i,
+    /\.paypal\.com$/i,
+    /\.braintree.*\.com$/i,
+    /\.square(up)?\.com$/i,
+    /\.adyen\.com$/i,
+    /^pay\./i,
+    /^checkout\./i,
+    /^billing\./i,
+    /^wallet\./i,
+  ];
+  
+  function isInterceptDenylisted() {
+    const host = location.hostname.toLowerCase();
+    if (INTERCEPT_DENYLIST_HOSTS.includes(host)) return true;
+    for (const pattern of INTERCEPT_DENYLIST_PATTERNS) {
+      if (pattern.test(host)) return true;
+    }
+    return false;
+  }
+  
   const GENERIC_TYPE_STRINGS = new Set([
     'text', 'multi-line text', 'multiline text', 'multi line text',
     'single-line text', 'single line text', 'singleline text',
@@ -1620,6 +1669,12 @@
     if (!saveInterceptEnabled) return;
     if (modalOpen) return;
     
+    // Never intercept on denylisted hosts (payment/admin dashboards)
+    if (isInterceptDenylisted()) return;
+    
+    // Only intercept if we have an active baseline (we're actually tracking this page)
+    if (baseline.size === 0) return;
+    
     const target = e.target.closest('button, input[type="submit"], [role="button"], a');
     if (!target || !isSaveButton(target)) return;
     
@@ -1707,6 +1762,12 @@
     document.addEventListener('submit', (e) => {
       if (!saveInterceptEnabled) return;
       if (modalOpen) return;
+      
+      // Never intercept on denylisted hosts (payment/admin dashboards)
+      if (isInterceptDenylisted()) return;
+      
+      // Only intercept if we have an active baseline (we're actually tracking this page)
+      if (baseline.size === 0) return;
       
       const dirty = getDirtyFields();
       if (dirty.length === 0) return;
@@ -2373,6 +2434,7 @@
       getCheckboxGroupLabel,
       getSectionHeadingLabel,
       isAspNetListItem,
+      isInterceptDenylisted,
       getBaseline: () => baseline
     };
   }
