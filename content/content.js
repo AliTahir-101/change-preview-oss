@@ -1509,7 +1509,7 @@
    * Forward this sub-frame's state up to the top frame. Keys are namespaced with
    * the frame UID so they never collide with other frames or the top document.
    */
-  function postReportToTop(kind) {
+  function postReportToTop(kind, trigger) {
     if (IS_TOP_FRAME) return;
     try {
       const payload = { [CP_FRAME_TAG]: true, kind, uid: FRAME_UID };
@@ -1518,6 +1518,7 @@
         payload.dirty = r.dirty.map((d) => ({ ...d, key: FRAME_KEY_PREFIX + d.key }));
         payload.allFieldKeys = r.allFieldKeys.map((k) => FRAME_KEY_PREFIX + k);
         payload.coverage = r.coverage;
+        payload.trigger = trigger === 'user-input' ? 'user-input' : 'scan';
       }
       window.top.postMessage(payload, '*');
     } catch {}
@@ -1535,14 +1536,16 @@
     }).catch(() => {});
   }
 
-  function notifyPanel() {
+  function notifyPanel(trigger) {
     // After Clear/Reapply, suppress notifications to prevent phantom dirty rows.
     if (isSuppressed()) return;
+
+    const kind = trigger === 'user-input' ? 'user-input' : 'scan';
 
     if (!IS_TOP_FRAME) {
       // Sub-frames never talk to the panel directly; they forward to the top
       // frame, which keeps the tracked identity on the real top-level page.
-      postReportToTop('FIELDS');
+      postReportToTop('FIELDS', kind);
       return;
     }
 
@@ -1560,19 +1563,27 @@
         // Include ALL field keys so the panel builds a STABLE fingerprint.
         // Without this, save (dirty keys only) and restore (all keys) mismatch.
         allFieldKeys: agg.allFieldKeys,
-        coverage: agg.coverage
+        coverage: agg.coverage,
+        // 'user-input' = trusted edit; 'scan' = snapshot/mutation/heartbeat.
+        // The panel ignores scan pushes while a Keep snapshot is restored so a
+        // post-reload hydration/empty baseline cannot flash-then-clear Keep rows.
+        trigger: kind
       }
     }).catch(() => {});
   }
 
   /** Debounced top-frame push used when sub-frame reports arrive/expire. */
   let aggregatePushTimer = null;
-  function scheduleAggregatePush() {
+  let aggregatePushTrigger = 'scan';
+  function scheduleAggregatePush(trigger) {
     if (!IS_TOP_FRAME) return;
+    if (trigger === 'user-input') aggregatePushTrigger = 'user-input';
     clearTimeout(aggregatePushTimer);
     aggregatePushTimer = setTimeout(() => {
+      const kind = aggregatePushTrigger;
+      aggregatePushTrigger = 'scan';
       updateBadge();
-      notifyPanel();
+      notifyPanel(kind);
     }, 150);
   }
 
@@ -1788,9 +1799,10 @@
         dirty: Array.isArray(d.dirty) ? d.dirty : [],
         allFieldKeys: Array.isArray(d.allFieldKeys) ? d.allFieldKeys : [],
         coverage: d.coverage || { tracked: 0, total: 0, skipped: 0 },
-        ts: Date.now()
+        ts: Date.now(),
+        trigger: d.trigger === 'user-input' ? 'user-input' : 'scan'
       });
-      scheduleAggregatePush();
+      scheduleAggregatePush(d.trigger === 'user-input' ? 'user-input' : 'scan');
       return;
     }
 
@@ -2285,9 +2297,12 @@
       };
     };
     
+    let inputPushTrigger = 'scan';
     const debouncedUpdate = debounce(() => {
+      const kind = inputPushTrigger;
+      inputPushTrigger = 'scan';
       updateBadge();
-      notifyPanel();
+      notifyPanel(kind);
     }, 300);
     
     /**
@@ -2314,6 +2329,9 @@
         // DO NOT re-baseline here - baseline stays from Clear time
         // This edit will be the first dirty row vs that baseline
       }
+      // Latch user-input so a following programmatic scan inside the debounce
+      // window cannot downgrade the push (hydration vs a real keystroke).
+      if (e.isTrusted && !applyingChanges) inputPushTrigger = 'user-input';
       debouncedUpdate();
     }
     
