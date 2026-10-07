@@ -12,17 +12,24 @@
    * real page) rather than a sub-frame / iframe?
    *
    * The extension injects into all frames (`all_frames: true`) so it can reach
-   * forms rendered inside same-origin iframes. But only the top frame represents
-   * the page the user is actually on. Sub-frames — especially ephemeral CDN /
-   * widget iframes (e.g. b.stripecdn.com, js.stripe.com on dashboard.stripe.com)
-   * — must never drive the tracked identity (host/path shown in the panel, the
-   * storage key, or the badge), otherwise the displayed URL "flits" to whatever
-   * sub-frame last navigated even though the user is still on the real page.
+   * forms rendered inside iframes (SPA dashboards, portals, embedded widgets).
+   * We separate two concerns that an earlier version wrongly collapsed into one:
    *
-   * We therefore let the panel-facing role (field reporting, GET_FIELDS/command
-   * handling, badge updates, and the save-confirm intercept) run only in the top
-   * frame. Comparing window references never throws cross-origin, so this is
-   * safe and generic — no per-site hardcodes.
+   *   - WHERE WE COLLECT FIELDS: every frame collects its own fields, so forms
+   *     the user actually edits are detected even when they live in a frame.
+   *   - THE TRACKED IDENTITY (host/path shown in the panel, storage key, badge):
+   *     this must stay on the real top-level page and never flit to an ephemeral
+   *     CDN/widget sub-frame (e.g. b.stripecdn.com, js.stripe.com embedded in
+   *     dashboard.stripe.com).
+   *
+   * To get both, only the TOP frame talks to the panel/background. Sub-frames
+   * forward their detections to the top frame via postMessage; the top frame
+   * aggregates them and reports a single, stable top-level identity. The top
+   * frame also expires a sub-frame's contributions when that frame goes away
+   * (iframe/modal removed), so closing a dialog clears its stale rows.
+   *
+   * Comparing window references never throws cross-origin, so this check is safe
+   * and generic — no per-site hardcodes.
    */
   const IS_TOP_FRAME = (() => {
     try {
@@ -33,6 +40,40 @@
       return false;
     }
   })();
+
+  /**
+   * Cross-frame messaging constants for the top-frame aggregation protocol.
+   * Messages are tagged so unrelated postMessage traffic is ignored.
+   */
+  const CP_FRAME_TAG = '__changepreview_frame__';
+  const FRAME_UID = IS_TOP_FRAME
+    ? 'top'
+    : `f-${Math.random().toString(36).slice(2)}-${Date.now().toString(36)}`;
+  const FRAME_HEARTBEAT_MS = 1500;
+  const SUBFRAME_TTL_MS = 4000;
+  const FRAME_KEY_PREFIX = `frame:${FRAME_UID}:`;
+
+  /**
+   * Top frame only: latest detections forwarded by each sub-frame, keyed by the
+   * sub-frame's UID, each stamped with a timestamp so stale frames (removed
+   * iframes / closed modals) can be expired.
+   */
+  const subFrameReports = new Map();
+
+  /** Command ids already processed, so a relayed command never runs twice. */
+  const processedCmdIds = new Set();
+
+  function isFrameNamespacedKey(key) {
+    return typeof key === 'string' && key.startsWith('frame:');
+  }
+
+  /**
+   * Strip the ephemeral `frame:<uid>:` prefix so the same logical field reported
+   * by a remounted iframe (new UID) is recognized as one field, not N rows.
+   */
+  function logicalFieldKey(key) {
+    return typeof key === 'string' ? key.replace(/^frame:[^:]+:/, '') : '';
+  }
 
   const SKIP_TYPES = new Set(['password', 'hidden', 'file']);
   const SENSITIVE_PATTERN = /password|secret|token|ssn|cvv|cvc|otp|api[-_]?key|auth/i;
@@ -1384,45 +1425,402 @@
     return dirty;
   }
 
-  function updateBadge() {
-    // Only the top frame owns the tab's badge; sub-frames must not clobber it.
-    if (!IS_TOP_FRAME) return;
+  /**
+   * This frame's own detections (not yet merged with any sub-frame reports).
+   */
+  function getLocalReport() {
+    return {
+      dirty: getDirtyFields(),
+      allFieldKeys: Array.from(baseline.keys()),
+      coverage: {
+        tracked: baseline.size,
+        total: totalFieldsScanned,
+        skipped: skippedSensitive
+      }
+    };
+  }
 
-    const dirty = getDirtyFields();
-    const count = dirty.length;
-    
+  /**
+   * Drop sub-frame reports whose heartbeat has lapsed (iframe removed / modal
+   * closed). Returns true when something was pruned so the caller can refresh.
+   */
+  function pruneStaleSubFrames() {
+    const now = Date.now();
+    let changed = false;
+    for (const [uid, rep] of subFrameReports) {
+      if (now - rep.ts > SUBFRAME_TTL_MS) {
+        subFrameReports.delete(uid);
+        changed = true;
+      }
+    }
+    return changed;
+  }
+
+  /**
+   * Top frame: this frame's detections merged with every live sub-frame's, so
+   * forms inside iframes still surface while the identity stays top-level.
+   */
+  function getAggregatedReport() {
+    pruneStaleSubFrames();
+    const own = getLocalReport();
+    // Last-wins by logical key so a remounted iframe (new UID, old UID still in
+    // the map until TTL) cannot stack duplicate rows for the same field. Newer
+    // reports overwrite older ones; the winning row keeps its original key so
+    // live reveal can still forward into that frame.
+    const dirtyByLogical = new Map();
+    const addDirty = (rows) => {
+      for (const f of rows || []) {
+        if (!f || typeof f.key !== 'string') continue;
+        const logical = logicalFieldKey(f.key);
+        if (logical) dirtyByLogical.set(logical, f);
+      }
+    };
+    addDirty(own.dirty);
+    const reports = Array.from(subFrameReports.values())
+      .sort((a, b) => (a.ts || 0) - (b.ts || 0));
+    for (const rep of reports) addDirty(rep.dirty);
+
+    const keySet = new Set((own.allFieldKeys || []).map(logicalFieldKey).filter(Boolean));
+    for (const rep of reports) {
+      for (const k of rep.allFieldKeys || []) {
+        const logical = logicalFieldKey(k);
+        if (logical) keySet.add(logical);
+      }
+    }
+
+    let tracked = own.coverage.tracked;
+    let total = own.coverage.total;
+    let skipped = own.coverage.skipped;
+    for (const rep of reports) {
+      if (rep.coverage) {
+        tracked += rep.coverage.tracked || 0;
+        total += rep.coverage.total || 0;
+        skipped += rep.coverage.skipped || 0;
+      }
+    }
+    return {
+      dirty: Array.from(dirtyByLogical.values()),
+      allFieldKeys: Array.from(keySet),
+      coverage: { tracked, total, skipped }
+    };
+  }
+
+  /**
+   * Forward this sub-frame's state up to the top frame. Keys are namespaced with
+   * the frame UID so they never collide with other frames or the top document.
+   */
+  function postReportToTop(kind, trigger) {
+    if (IS_TOP_FRAME) return;
+    try {
+      const payload = { [CP_FRAME_TAG]: true, kind, uid: FRAME_UID };
+      if (kind === 'FIELDS') {
+        const r = getLocalReport();
+        payload.dirty = r.dirty.map((d) => ({ ...d, key: FRAME_KEY_PREFIX + d.key }));
+        payload.allFieldKeys = r.allFieldKeys.map((k) => FRAME_KEY_PREFIX + k);
+        payload.coverage = r.coverage;
+        payload.trigger = trigger === 'user-input' ? 'user-input' : 'scan';
+      }
+      window.top.postMessage(payload, '*');
+    } catch {}
+  }
+
+  function updateBadge() {
+    if (!IS_TOP_FRAME) {
+      postReportToTop('FIELDS');
+      return;
+    }
+    const count = getAggregatedReport().dirty.length;
     chrome.runtime.sendMessage({
       type: 'UPDATE_BADGE',
       count: count
     }).catch(() => {});
   }
 
-  function notifyPanel() {
-    // Only the top frame reports the page identity to the panel. Sub-frames
-    // (CDN/widget iframes) would otherwise push their own host and make the
-    // tracked URL flit away from the real top-level page.
-    if (!IS_TOP_FRAME) return;
-
-    // After Clear/Reapply, suppress notifications to prevent phantom dirty rows
+  function notifyPanel(trigger) {
+    // After Clear/Reapply, suppress notifications to prevent phantom dirty rows.
     if (isSuppressed()) return;
-    
-    const dirty = getDirtyFields();
+
+    const kind = trigger === 'user-input' ? 'user-input' : 'scan';
+
+    if (!IS_TOP_FRAME) {
+      // Sub-frames never talk to the panel directly; they forward to the top
+      // frame, which keeps the tracked identity on the real top-level page.
+      postReportToTop('FIELDS', kind);
+      return;
+    }
+
+    const agg = getAggregatedReport();
     chrome.runtime.sendMessage({
       type: 'FIELDS_UPDATE',
       data: {
         host: location.hostname,
         path: location.pathname,
-        dirty: dirty,
+        // Full top-level URL so the panel can key storage/baseline on the
+        // canonical page (origin + path + meaningful query), not host alone.
+        // Only the top frame sends this, so CDN/sub-frame URLs never leak in.
+        url: location.href,
+        dirty: agg.dirty,
         // Include ALL field keys so the panel builds a STABLE fingerprint.
         // Without this, save (dirty keys only) and restore (all keys) mismatch.
-        allFieldKeys: Array.from(baseline.keys()),
-        coverage: {
-          tracked: baseline.size,
-          total: totalFieldsScanned,
-          skipped: skippedSensitive
-        }
+        allFieldKeys: agg.allFieldKeys,
+        coverage: agg.coverage,
+        // 'user-input' = trusted edit; 'scan' = snapshot/mutation/heartbeat.
+        // The panel ignores scan pushes while a Keep snapshot is restored so a
+        // post-reload hydration/empty baseline cannot flash-then-clear Keep rows.
+        trigger: kind
       }
     }).catch(() => {});
+  }
+
+  /** Debounced top-frame push used when sub-frame reports arrive/expire. */
+  let aggregatePushTimer = null;
+  let aggregatePushTrigger = 'scan';
+  function scheduleAggregatePush(trigger) {
+    if (!IS_TOP_FRAME) return;
+    if (trigger === 'user-input') aggregatePushTrigger = 'user-input';
+    clearTimeout(aggregatePushTimer);
+    aggregatePushTimer = setTimeout(() => {
+      const kind = aggregatePushTrigger;
+      aggregatePushTrigger = 'scan';
+      updateBadge();
+      notifyPanel(kind);
+    }, 150);
+  }
+
+  /** Post a command down to every direct child frame (they relay further). */
+  function broadcastCommandToChildFrames(payload) {
+    try {
+      const frames = window.frames;
+      for (let i = 0; i < frames.length; i++) {
+        try { frames[i].postMessage(payload, '*'); } catch {}
+      }
+    } catch {}
+  }
+
+  function newCommandId() {
+    return `cmd-${Math.random().toString(36).slice(2)}-${Date.now().toString(36)}`;
+  }
+
+  /**
+   * Clear this frame's detections locally (same semantics as the CLEAR_BASELINE
+   * panel command). Extracted so it can run on the top frame AND on sub-frames
+   * when the command is relayed down.
+   */
+  function clearBaselineLocal() {
+    clearedSession = true;
+    suppressFor(3000);
+    snapshotBaseline(true);
+  }
+
+  /* ---------------------- Reveal / highlight a field ---------------------- */
+
+  // Single reusable highlight overlay for this frame. Position:fixed box drawn
+  // over the field's rect; never mutates the control, pointer-events:none, so it
+  // can't break page interactions. Host-page CSS can't affect it (inline styles).
+  let revealOverlay = null;
+  let revealFadeTimer = null;
+  let revealTrackTimer = null;
+
+  function removeRevealOverlay() {
+    clearTimeout(revealFadeTimer);
+    clearInterval(revealTrackTimer);
+    revealFadeTimer = null;
+    revealTrackTimer = null;
+    if (revealOverlay) {
+      try { revealOverlay.remove(); } catch {}
+      revealOverlay = null;
+    }
+  }
+
+  function ensureRevealOverlay() {
+    if (revealOverlay && revealOverlay.isConnected) return revealOverlay;
+    const o = document.createElement('div');
+    o.setAttribute('data-changepreview-reveal', '');
+    const s = o.style;
+    s.position = 'fixed';
+    s.zIndex = '2147483646';
+    s.pointerEvents = 'none';
+    s.boxSizing = 'border-box';
+    s.border = '2px solid #e67e22';
+    s.borderRadius = '6px';
+    s.boxShadow = '0 0 0 3px rgba(230,126,34,0.35), 0 0 14px 3px rgba(230,126,34,0.55)';
+    s.background = 'rgba(230,126,34,0.10)';
+    s.transition = 'opacity 180ms ease';
+    s.opacity = '0';
+    (document.body || document.documentElement).appendChild(o);
+    revealOverlay = o;
+    return o;
+  }
+
+  function positionRevealOverlay(el) {
+    let rect;
+    try { rect = el.getBoundingClientRect(); } catch { return; }
+    const o = ensureRevealOverlay();
+    const pad = 4;
+    o.style.left = (rect.left - pad) + 'px';
+    o.style.top = (rect.top - pad) + 'px';
+    o.style.width = (rect.width + pad * 2) + 'px';
+    o.style.height = (rect.height + pad * 2) + 'px';
+    o.style.opacity = '1';
+  }
+
+  // Re-resolve the live element for a key (the DOM may have re-rendered since the
+  // baseline was taken). Generic: re-scans fields and matches by key.
+  function resolveElementForKey(key) {
+    const entry = baseline.get(key);
+    let el = entry && entry.element;
+    if (el && el.isConnected) return el;
+    try {
+      for (const f of collectFields()) {
+        if (f.key === key && f.element && f.element.isConnected) {
+          if (entry) entry.element = f.element;
+          return f.element;
+        }
+      }
+    } catch {}
+    return null;
+  }
+
+  /**
+   * Pick the element to HIGHLIGHT for a detection row.
+   *
+   * For choice groups the baseline stores the FIRST option as the group's
+   * `element`, which is usually not the option the row describes — so a naive
+   * reveal highlights the wrong option (e.g. MS Forms: B selected, A highlighted).
+   * Target the SELECTED option instead, generically across radios, checkbox
+   * groups and card-style choice UIs (via the existing group/wrapper helpers):
+   *   - radio group → the checked radio's clickable wrapper (else the question
+   *     root if nothing is checked);
+   *   - checkbox group → the single checked option's wrapper, or the group root
+   *     when several/none are checked (frame the whole question, never a sibling);
+   *   - everything else (text, textarea, select, lone checkbox) → the control.
+   */
+  function resolveRevealTarget(key) {
+    const entry = baseline.get(key);
+    const base = resolveElementForKey(key);
+    if (!base) return null;
+    const type = entry && entry.type;
+
+    if (base.type === 'radio' || type === 'radio') {
+      try {
+        const inputs = getRadioGroupInputs(base);
+        const checked = inputs.find((r) => r.checked);
+        if (checked) return getOptionWrapper(checked) || checked;
+        const root = getRadioRoot(base);
+        if (root) return root;
+      } catch {}
+      return getOptionWrapper(base) || base;
+    }
+
+    if (type === 'checkbox-group') {
+      try {
+        const group = getCheckboxGroupInputs(base);
+        if (group && Array.isArray(group.checkboxes)) {
+          const checked = group.checkboxes.filter((cb) => cb.checked);
+          if (checked.length === 1) return getOptionWrapper(checked[0]) || checked[0];
+          if (group.root) return group.root;
+        }
+      } catch {}
+      return base;
+    }
+
+    return base;
+  }
+
+  function maybeFocusField(el) {
+    // Focus only simple text-like controls, and never scroll via focus (we scroll
+    // ourselves). Avoid focusing checkbox/radio/select/file/date which can trigger
+    // pickers or destructive side effects on some pages.
+    try {
+      const tag = (el.tagName || '').toLowerCase();
+      const type = (el.type || '').toLowerCase();
+      const focusableText = tag === 'textarea' || el.isContentEditable ||
+        (tag === 'input' && ['text', 'email', 'search', 'url', 'tel', 'number', 'password', ''].includes(type));
+      if (focusableText) el.focus({ preventScroll: true });
+    } catch {}
+  }
+
+  /**
+   * Scroll to and briefly highlight the field for `key` in THIS frame.
+   * Returns true if a live element was found and highlighted.
+   */
+  function revealFieldLocal(key) {
+    const el = resolveRevealTarget(key);
+    if (!el) return false;
+
+    try {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+    } catch {
+      try { el.scrollIntoView(); } catch {}
+    }
+
+    removeRevealOverlay();
+    positionRevealOverlay(el);
+    maybeFocusField(el);
+
+    // Track the element for a moment so the ring follows the smooth-scroll, then
+    // fade out. A subsequent reveal cancels this and starts fresh.
+    let ticks = 0;
+    revealTrackTimer = setInterval(() => {
+      ticks++;
+      positionRevealOverlay(el);
+      if (ticks >= 8) { clearInterval(revealTrackTimer); revealTrackTimer = null; }
+    }, 80);
+
+    revealFadeTimer = setTimeout(() => {
+      if (revealOverlay) revealOverlay.style.opacity = '0';
+      revealFadeTimer = setTimeout(removeRevealOverlay, 220);
+    }, 1800);
+
+    return true;
+  }
+
+  /**
+   * Handle cross-frame messages. The top frame aggregates sub-frame detections;
+   * every frame relays panel commands (CLEAR, REVEAL) down the tree.
+   *
+   * Messages are only trusted when tagged with CP_FRAME_TAG and not sent by this
+   * same window. This is local-only display/baseline coordination (no data ever
+   * leaves the browser), so the lightweight tag check is sufficient.
+   */
+  function handleFrameMessage(event) {
+    const d = event && event.data;
+    if (!d || d[CP_FRAME_TAG] !== true) return;
+    if (event.source === window.self) return;
+
+    if (d.kind === 'FIELDS' || d.kind === 'GONE') {
+      if (!IS_TOP_FRAME) return; // reports always go straight to the top frame
+      if (typeof d.uid !== 'string') return;
+      if (d.kind === 'GONE') {
+        if (subFrameReports.delete(d.uid)) scheduleAggregatePush();
+        return;
+      }
+      subFrameReports.set(d.uid, {
+        dirty: Array.isArray(d.dirty) ? d.dirty : [],
+        allFieldKeys: Array.isArray(d.allFieldKeys) ? d.allFieldKeys : [],
+        coverage: d.coverage || { tracked: 0, total: 0, skipped: 0 },
+        ts: Date.now(),
+        trigger: d.trigger === 'user-input' ? 'user-input' : 'scan'
+      });
+      scheduleAggregatePush(d.trigger === 'user-input' ? 'user-input' : 'scan');
+      return;
+    }
+
+    if (d.kind === 'CMD') {
+      if (typeof d.cmdId !== 'string' || processedCmdIds.has(d.cmdId)) return;
+      processedCmdIds.add(d.cmdId);
+      if (d.cmd === 'CLEAR') {
+        clearBaselineLocal();
+        postReportToTop('FIELDS');
+      } else if (d.cmd === 'REVEAL') {
+        // Reveal only if the (namespaced) key belongs to this frame.
+        if (typeof d.key === 'string' && d.key.startsWith(FRAME_KEY_PREFIX)) {
+          revealFieldLocal(d.key.slice(FRAME_KEY_PREFIX.length));
+        }
+      }
+      // Relay further down so deeply-nested frames also receive the command.
+      broadcastCommandToChildFrames(d);
+    }
   }
 
   function isSaveButton(el) {
@@ -1899,9 +2297,12 @@
       };
     };
     
+    let inputPushTrigger = 'scan';
     const debouncedUpdate = debounce(() => {
+      const kind = inputPushTrigger;
+      inputPushTrigger = 'scan';
       updateBadge();
-      notifyPanel();
+      notifyPanel(kind);
     }, 300);
     
     /**
@@ -1928,6 +2329,9 @@
         // DO NOT re-baseline here - baseline stays from Clear time
         // This edit will be the first dirty row vs that baseline
       }
+      // Latch user-input so a following programmatic scan inside the debounce
+      // window cannot downgrade the push (hydration vs a real keystroke).
+      if (e.isTrusted && !applyingChanges) inputPushTrigger = 'user-input';
       debouncedUpdate();
     }
     
@@ -1983,6 +2387,24 @@
     }, true);
   }
 
+  /**
+   * Remove baseline entries whose element has been detached from the DOM — e.g.
+   * a modal/dialog/overlay closed, or a form root was unmounted (SPA portal).
+   * Returns the number pruned so the caller can refresh the panel and clear the
+   * now-stale rows for that closed context.
+   */
+  function pruneDetachedBaseline() {
+    let removed = 0;
+    for (const [key, entry] of baseline) {
+      const el = entry && entry.element;
+      if (el && el.isConnected === false) {
+        baseline.delete(key);
+        removed++;
+      }
+    }
+    return removed;
+  }
+
   function setupMutationObserver() {
     let debounceTimer = null;
     
@@ -1990,13 +2412,22 @@
       clearTimeout(debounceTimer);
       debounceTimer = setTimeout(() => {
         const currentFieldCount = collectFields().length;
+        // Large structural change (e.g. a whole form mounted) → re-baseline.
         if (Math.abs(currentFieldCount - baseline.size) > baseline.size * 0.5) {
           snapshotBaseline();
+          return;
         }
-      }, 500);
+        // A tracked field's element left the DOM (modal/dialog/overlay closed or
+        // the form root was unmounted without a full navigation). Drop it and
+        // refresh so the panel stops showing stale rows for that closed context.
+        if (pruneDetachedBaseline() > 0) {
+          updateBadge();
+          notifyPanel();
+        }
+      }, 400);
     });
     
-    observer.observe(document.body, {
+    observer.observe(document.documentElement || document.body, {
       childList: true,
       subtree: true
     });
@@ -2521,20 +2952,19 @@
     if (!IS_TOP_FRAME) return false;
 
     switch (message.type) {
-      case 'GET_FIELDS':
-        const dirty = getDirtyFields();
+      case 'GET_FIELDS': {
+        const agg = getAggregatedReport();
         sendResponse({
           host: location.hostname,
           path: location.pathname,
-          dirty: dirty,
-          allFieldKeys: Array.from(baseline.keys()),
-          coverage: {
-            tracked: baseline.size,
-            total: totalFieldsScanned,
-            skipped: skippedSensitive
-          }
+          // Full top-level URL for canonical page-keyed storage (see FIELDS_UPDATE).
+          url: location.href,
+          dirty: agg.dirty,
+          allFieldKeys: agg.allFieldKeys,
+          coverage: agg.coverage
         });
         break;
+      }
         
       case 'CLEAR_BASELINE':
         /**
@@ -2548,10 +2978,19 @@
          * The clearedSession flag is the definitive fix - it ensures ZERO detections
          * after Clear regardless of timing, baseline state, or async issues.
          * Only a real user input (not programmatic) will reset the flag.
+         *
+         * Also drop any aggregated sub-frame detections and relay the clear down
+         * so fields that live in iframes are cleared too (and do not re-appear on
+         * the next sub-frame heartbeat).
          */
-        clearedSession = true;
-        suppressFor(3000);
-        snapshotBaseline(true);
+        clearBaselineLocal();
+        subFrameReports.clear();
+        broadcastCommandToChildFrames({
+          [CP_FRAME_TAG]: true,
+          kind: 'CMD',
+          cmd: 'CLEAR',
+          cmdId: newCommandId()
+        });
         sendResponse({ success: true, baselineSize: baseline.size });
         break;
         
@@ -2559,6 +2998,30 @@
         saveInterceptEnabled = message.enabled;
         sendResponse({ success: true });
         break;
+
+      case 'REVEAL_FIELD': {
+        /**
+         * Scroll to + highlight the field for a clicked panel row. Sub-frame rows
+         * carry a `frame:<uid>:` key; forward the reveal down the frame tree so the
+         * owning same-origin frame highlights it. Cross-origin frames simply never
+         * receive/act on it (fail soft).
+         */
+        const key = message.key;
+        if (isFrameNamespacedKey(key)) {
+          broadcastCommandToChildFrames({
+            [CP_FRAME_TAG]: true,
+            kind: 'CMD',
+            cmd: 'REVEAL',
+            key,
+            cmdId: newCommandId()
+          });
+          sendResponse({ success: true, forwarded: true });
+        } else {
+          const found = revealFieldLocal(key);
+          sendResponse({ success: true, found });
+        }
+        break;
+      }
         
       case 'APPLY_CHANGES':
         /**
@@ -2578,7 +3041,12 @@
          */
         applyingChanges = true;
         suppressFor(1000);
-        const applyResults = applyChangesWithBaseline(message.changes || []);
+        // Only the top document's own changes are reapplied here. Sub-frame rows
+        // carry a `frame:<uid>:` key whose UID is regenerated each load, so they
+        // cannot be reliably reapplied cross-frame; skip them instead of counting
+        // them as failures.
+        const ownChanges = (message.changes || []).filter((c) => !isFrameNamespacedKey(c.key));
+        const applyResults = applyChangesWithBaseline(ownChanges);
         setTimeout(() => { applyingChanges = false; }, 500);
         sendResponse(applyResults);
         break;
@@ -2590,11 +3058,10 @@
   });
 
   function init() {
-    // Sub-frames stay inert: they must not snapshot, report, intercept saves, or
-    // own the badge/identity. Only the top-level page the user is on drives the
-    // extension. This keeps the tracked URL on the real host instead of hopping
-    // to CDN/widget iframes.
-    if (!IS_TOP_FRAME) return;
+    // Every frame collects fields so forms inside iframes are still detected, but
+    // only the top frame talks to the panel. Sub-frames forward their detections
+    // to the top frame, which aggregates them under a single top-level identity.
+    window.addEventListener('message', handleFrameMessage, false);
 
     if (document.readyState === 'loading') {
       document.addEventListener('DOMContentLoaded', () => {
@@ -2610,6 +3077,25 @@
 
     loadConfirmOnSavePref();
     setupPrefSync();
+
+    if (IS_TOP_FRAME) {
+      // Expire sub-frame detections whose frame has gone away (iframe/modal
+      // removed) so their rows clear even if the frame never fired `pagehide`.
+      setInterval(() => {
+        if (pruneStaleSubFrames()) {
+          updateBadge();
+          notifyPanel();
+        }
+      }, FRAME_HEARTBEAT_MS);
+    } else {
+      // Heartbeat keeps this sub-frame's detections alive in the top frame; a
+      // final GONE on teardown clears them immediately when the frame is removed.
+      setInterval(() => { postReportToTop('FIELDS'); }, FRAME_HEARTBEAT_MS);
+      const sayGone = () => postReportToTop('GONE');
+      window.addEventListener('pagehide', sayGone, true);
+      window.addEventListener('unload', sayGone, true);
+      setTimeout(() => postReportToTop('FIELDS'), 400);
+    }
   }
 
   /**
@@ -2634,7 +3120,20 @@
       getSectionHeadingLabel,
       isAspNetListItem,
       isInterceptDenylisted,
-      getBaseline: () => baseline
+      getBaseline: () => baseline,
+      // Frame identity / aggregation / lifecycle hooks for tests.
+      IS_TOP_FRAME,
+      FRAME_UID,
+      getLocalReport,
+      getAggregatedReport,
+      pruneDetachedBaseline,
+      pruneStaleSubFrames,
+      handleFrameMessage,
+      clearBaselineLocal,
+      revealFieldLocal,
+      resolveRevealTarget,
+      logicalFieldKey,
+      getSubFrameReports: () => subFrameReports
     };
   }
 

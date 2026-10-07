@@ -11,10 +11,12 @@ ChangePreview is a Chrome extension that snapshots form fields when you load a p
 - **Side panel UI** — Shows only dirty fields with old vs new values
 - **Soft Save confirm** — Modal appears when you click Save/Submit/Update with pending changes
 - **Confirm on save toggle** — A header checkbox turns the save/submit confirmation dialog off; change detection and the side panel keep working for information only
+- **Click to locate** — Click a change row to scroll to and briefly highlight that control on the page (works in same-origin frames too); copying Was/Now still works via the value/label click
 - **Copy Markdown / CSV** — One-click export for change documentation
 - **Coverage meter** — Honest about what fields are being tracked
 - **Privacy-first** — All data stays local; passwords and sensitive fields are skipped
 - **Dark mode** — Follows your OS preference
+- **Discreet credit** — Side-panel footer: “Made with ♥ by NextGen Folks”, linking to the products section on nextgenfolks.com
 
 ## Installation (Load Unpacked)
 
@@ -139,7 +141,8 @@ The extension uses a sophisticated label resolution algorithm to find the human-
 ## Known Limitations
 
 - **Shadow DOM** — Fields inside closed Shadow DOM roots (e.g., some Salesforce Lightning components) cannot be accessed. The coverage meter shows partial coverage when this occurs.
-- **Iframes** — Only the top-level page the user is on drives the tracked URL, badge, and save-confirm. Forms rendered inside iframes (including CDN/widget iframes such as those on SPA dashboards) are not tracked, so the tracked identity always stays on the real page host instead of hopping to a sub-frame/CDN URL.
+- **Iframes** — The tracked URL, badge, and save-confirm identity are always driven by the real top-level page, so the tracked identity stays on the page host instead of hopping to a sub-frame/CDN URL. Forms rendered inside same-origin iframes (e.g. dashboard panels/overlays) are still detected: each frame reports its fields up to the top frame, which aggregates them under the top-level identity. Cross-origin iframes remain inaccessible to the content script and cannot be tracked.
+- **Page identity for Keep/Reapply** — Detections are stored per *form page*, keyed on the canonical full URL (origin + path + meaningful query) with the hash (`#…`) and common tracking params (`utm_*`, `gclid`, `fbclid`, …) stripped. So the same form survives different campaign/share links, while two different forms on the same domain (e.g. two Tally forms, or `?formId=123` vs `?formId=456`) stay separate. Keep holds **one snapshot per canonical page** — fingerprint/legacy host+path siblings and remounted-iframe `frame:<uid>:` copies of the same field are collapsed on save/restore so a reload cannot stack duplicate rows. After reload the restored snapshot **stays on screen**: live scans (empty baseline, hydration dirty, URL query settling) cannot flash-then-clear it; only a trusted user edit, Clear, Keep-off, or a real navigation to a different path/form ends restore. The side-panel header still shows a short host for readability. One consequence: single-page apps that distinguish routes **only** by the URL hash (`example.com/app#/form/1` vs `#/form/2`) share one identity, since the hash is stripped. Apps that change the path or a query param on navigation are keyed separately as expected.
 - **Custom widgets** — Non-standard form widgets (custom React/Vue components that don't use native inputs) may not be detected
 - **Async loading** — If form values are populated after page load, the baseline may be incomplete. Use the "Re-snapshot" button to capture the current state.
 - **Form builder variations** — While tested with Microsoft Forms and Google Forms patterns, some form builders may use unique DOM structures that aren't recognized.

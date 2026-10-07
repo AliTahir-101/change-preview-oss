@@ -286,6 +286,25 @@ body {
   background: var(--bg-secondary);
 }
 
+/* Whole-row click locates the field on the page. */
+.change-row {
+  cursor: pointer;
+}
+
+.change-row:hover .row-number {
+  color: var(--accent);
+}
+
+/* Brief flash when a row is clicked to locate its field. */
+@keyframes cp-row-locate-flash {
+  0% { background: rgba(230, 126, 34, 0.35); }
+  100% { background: transparent; }
+}
+
+.change-row.row-locating td {
+  animation: cp-row-locate-flash 0.9s ease-out;
+}
+
 .field-label-wrapper {
   display: flex;
   align-items: flex-start;
@@ -637,6 +656,25 @@ body {
   line-height: 1.4;
 }
 
+.publisher-credit {
+  font-size: 10px;
+  color: var(--text-muted);
+  text-align: center;
+  padding: 0 12px 8px;
+  line-height: 1.4;
+  margin: 0;
+}
+
+.publisher-credit a {
+  color: var(--text-muted);
+  text-decoration: none;
+}
+
+.publisher-credit a:hover {
+  color: var(--text-secondary);
+  text-decoration: underline;
+}
+
 .confirm-dialog {
   position: fixed;
   top: 0;
@@ -906,6 +944,20 @@ body {
   font-size: 11px;
   color: var(--text-muted);
   margin: 0 0 6px 0;
+}
+
+.unlock-seller a {
+  color: var(--text-muted);
+  text-decoration: none;
+}
+
+.unlock-seller a:hover {
+  color: var(--text-secondary);
+  text-decoration: underline;
+}
+
+.unlock-footer .publisher-credit {
+  padding: 0 0 8px;
 }
 
 .unlock-support {
