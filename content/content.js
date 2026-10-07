@@ -67,6 +67,14 @@
     return typeof key === 'string' && key.startsWith('frame:');
   }
 
+  /**
+   * Strip the ephemeral `frame:<uid>:` prefix so the same logical field reported
+   * by a remounted iframe (new UID) is recognized as one field, not N rows.
+   */
+  function logicalFieldKey(key) {
+    return typeof key === 'string' ? key.replace(/^frame:[^:]+:/, '') : '';
+  }
+
   const SKIP_TYPES = new Set(['password', 'hidden', 'file']);
   const SENSITIVE_PATTERN = /password|secret|token|ssn|cvv|cvc|otp|api[-_]?key|auth/i;
   const SENSITIVE_AUTOCOMPLETE = new Set([
@@ -1455,22 +1463,46 @@
   function getAggregatedReport() {
     pruneStaleSubFrames();
     const own = getLocalReport();
-    const dirty = own.dirty.slice();
-    const allFieldKeys = own.allFieldKeys.slice();
+    // Last-wins by logical key so a remounted iframe (new UID, old UID still in
+    // the map until TTL) cannot stack duplicate rows for the same field. Newer
+    // reports overwrite older ones; the winning row keeps its original key so
+    // live reveal can still forward into that frame.
+    const dirtyByLogical = new Map();
+    const addDirty = (rows) => {
+      for (const f of rows || []) {
+        if (!f || typeof f.key !== 'string') continue;
+        const logical = logicalFieldKey(f.key);
+        if (logical) dirtyByLogical.set(logical, f);
+      }
+    };
+    addDirty(own.dirty);
+    const reports = Array.from(subFrameReports.values())
+      .sort((a, b) => (a.ts || 0) - (b.ts || 0));
+    for (const rep of reports) addDirty(rep.dirty);
+
+    const keySet = new Set((own.allFieldKeys || []).map(logicalFieldKey).filter(Boolean));
+    for (const rep of reports) {
+      for (const k of rep.allFieldKeys || []) {
+        const logical = logicalFieldKey(k);
+        if (logical) keySet.add(logical);
+      }
+    }
+
     let tracked = own.coverage.tracked;
     let total = own.coverage.total;
     let skipped = own.coverage.skipped;
-
-    for (const rep of subFrameReports.values()) {
-      if (Array.isArray(rep.dirty)) dirty.push(...rep.dirty);
-      if (Array.isArray(rep.allFieldKeys)) allFieldKeys.push(...rep.allFieldKeys);
+    for (const rep of reports) {
       if (rep.coverage) {
         tracked += rep.coverage.tracked || 0;
         total += rep.coverage.total || 0;
         skipped += rep.coverage.skipped || 0;
       }
     }
-    return { dirty, allFieldKeys, coverage: { tracked, total, skipped } };
+    return {
+      dirty: Array.from(dirtyByLogical.values()),
+      allFieldKeys: Array.from(keySet),
+      coverage: { tracked, total, skipped }
+    };
   }
 
   /**
@@ -3082,6 +3114,7 @@
       clearBaselineLocal,
       revealFieldLocal,
       resolveRevealTarget,
+      logicalFieldKey,
       getSubFrameReports: () => subFrameReports
     };
   }
