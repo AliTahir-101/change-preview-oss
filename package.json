@@ -5,7 +5,7 @@
   "type": "module",
   "description": "ChangePreview Chrome extension — dev/test tooling (not shipped in the unpacked extension).",
   "scripts": {
-    "test": "node tests/label-resolution.test.mjs && node tests/confirm-dialog.test.mjs && node tests/frame-identity-lifecycle.test.mjs && node tests/active-tab-identity.test.mjs && node tests/page-identity.test.mjs"
+    "test": "node tests/label-resolution.test.mjs && node tests/confirm-dialog.test.mjs && node tests/frame-identity-lifecycle.test.mjs && node tests/active-tab-identity.test.mjs && node tests/page-identity.test.mjs && node tests/reveal-field.test.mjs"
   },
   "devDependencies": {
     "jsdom": "^24.1.0"
