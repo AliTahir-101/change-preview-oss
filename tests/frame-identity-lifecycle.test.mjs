@@ -118,6 +118,44 @@ console.log('\nframe aggregation: sub-frame reports merge into the top frame');
 }
 
 /* ------------------------------------------------------------------ */
+console.log('\nframe aggregation: remounted iframe does not duplicate the same field');
+{
+  const { internals } = loadHarness('<!DOCTYPE html><body></body>');
+  internals.snapshotBaseline();
+
+  const row = (uid) => ({
+    key: `frame:${uid}:name:email`, label: 'Work email', type: 'text', was: 'a@x.com', now: 'b@x.com'
+  });
+
+  internals.handleFrameMessage({
+    source: {},
+    data: {
+      [CP_FRAME_TAG]: true, kind: 'FIELDS', uid: 'oldUid',
+      dirty: [row('oldUid')], allFieldKeys: ['frame:oldUid:name:email'],
+      coverage: { tracked: 1, total: 1, skipped: 0 }
+    }
+  });
+  internals.handleFrameMessage({
+    source: {},
+    data: {
+      [CP_FRAME_TAG]: true, kind: 'FIELDS', uid: 'newUid',
+      dirty: [row('newUid')], allFieldKeys: ['frame:newUid:name:email'],
+      coverage: { tracked: 1, total: 1, skipped: 0 }
+    }
+  });
+
+  const agg = internals.getAggregatedReport();
+  const emailRows = agg.dirty.filter((d) => internals.logicalFieldKey(d.key) === 'name:email');
+  check('same logical field from two frame UIDs collapses to one dirty row',
+    emailRows.length === 1, `rows=${emailRows.length} dirty=${JSON.stringify(agg.dirty)}`);
+  check('winning row is the newer frame UID', emailRows[0] && emailRows[0].key === 'frame:newUid:name:email',
+    emailRows[0] && emailRows[0].key);
+  check('allFieldKeys are unique logical keys',
+    agg.allFieldKeys.filter((k) => k === 'name:email').length === 1,
+    JSON.stringify(agg.allFieldKeys));
+}
+
+/* ------------------------------------------------------------------ */
 console.log('\nframe aggregation: stale sub-frames expire (heartbeat TTL)');
 {
   const { internals } = loadHarness('<!DOCTYPE html><body></body>');
