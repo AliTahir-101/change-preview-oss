@@ -4,6 +4,8 @@
 
 ChangePreview is a Chrome extension that snapshots form fields when you load a page, then shows you a clear "Field | Was | Now" diff before you hit Save. Copy the changes as Markdown or CSV for your CAB tickets, Slack threads, or Jira issues.
 
+> Chrome Web Store listing copy (name, descriptions, category, privacy practices, pricing note) lives in [`store/chrome-web-store.md`](store/chrome-web-store.md).
+
 ## Features
 
 - **Side panel UI** — Shows only dirty fields with old vs new values

@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "ChangePreview",
   "version": "0.1.0",
-  "description": "Before you save an admin form, see exactly what changed — then copy it or save with confidence.",
+  "description": "See form changes before you save: compare Was vs Now, export to Markdown or CSV, keep edits locally. Private, nothing uploaded.",
   "permissions": [
     "activeTab",
     "storage",
