@@ -804,6 +804,12 @@ async function refreshData(explicitTabId) {
       const newFingerprint = createFingerprint(pageKey, allFieldKeys);
       
       const liveHasChanges = response.dirty?.length > 0;
+      // The tracker survives tab/window switches; a new document starts false.
+      // Its live session is authoritative, including after the user undoes edits.
+      if (response.hasLiveSession === true) {
+        justReloaded = false;
+        endKeepRestore();
+      }
 
       // Durable Keep: a live SCAN on the same logical page must not replace
       // the restored snapshot (hydration dirty or empty baseline after reload).
@@ -1427,6 +1433,10 @@ chrome.runtime.onMessage.addListener(async (message, sender) => {
 
     const data = message.data;
     const hasDirtyData = data.dirty?.length > 0;
+    if (data.hasLiveSession === true) {
+      justReloaded = false;
+      endKeepRestore();
+    }
     const trigger = data.trigger === 'user-input' ? 'user-input' : 'scan';
     
     // During the short-term cleared window (5s), only accept updates with real dirty data

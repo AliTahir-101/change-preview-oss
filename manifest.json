@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ChangePreview",
-  "version": "0.4.4",
+  "version": "0.4.5",
   "description": "Review form changes before you save. Compare old and new values, recover saved edits after a refresh, and export your changes.",
   "permissions": [
     "activeTab",

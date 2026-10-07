@@ -345,6 +345,8 @@
    * Set to true during APPLY_CHANGES, prevents clearedSession from being reset.
    */
   let applyingChanges = false;
+  // Lives with this document, not with the panel or focused browser tab.
+  let hasLiveSession = false;
   
   function isSuppressed() {
     return Date.now() < suppressUntil;
@@ -1609,6 +1611,7 @@
         // canonical page (origin + path + meaningful query), not host alone.
         // Only the top frame sends this, so CDN/sub-frame URLs never leak in.
         url: location.href,
+        hasLiveSession,
         dirty: agg.dirty,
         // Include ALL field keys so the panel builds a STABLE fingerprint.
         // Without this, save (dirty keys only) and restore (all keys) mismatch.
@@ -1627,7 +1630,10 @@
   let aggregatePushTrigger = 'scan';
   function scheduleAggregatePush(trigger) {
     if (!IS_TOP_FRAME) return;
-    if (trigger === 'user-input') aggregatePushTrigger = 'user-input';
+    if (trigger === 'user-input') {
+      hasLiveSession = true;
+      aggregatePushTrigger = 'user-input';
+    }
     clearTimeout(aggregatePushTimer);
     aggregatePushTimer = setTimeout(() => {
       const kind = aggregatePushTrigger;
@@ -1657,6 +1663,7 @@
    * when the command is relayed down.
    */
   function clearBaselineLocal() {
+    hasLiveSession = true;
     clearedSession = true;
     suppressFor(3000);
     snapshotBaseline(true);
@@ -2384,7 +2391,10 @@
       }
       // Latch user-input so a following programmatic scan inside the debounce
       // window cannot downgrade the push (hydration vs a real keystroke).
-      if (e.isTrusted && !applyingChanges) inputPushTrigger = 'user-input';
+      if (e.isTrusted && !applyingChanges) {
+        hasLiveSession = true;
+        inputPushTrigger = 'user-input';
+      }
       debouncedUpdate();
     }
     
@@ -3020,6 +3030,7 @@
           path: location.pathname,
           // Full top-level URL for canonical page-keyed storage (see FIELDS_UPDATE).
           url: location.href,
+          hasLiveSession,
           dirty: agg.dirty,
           allFieldKeys: agg.allFieldKeys,
           coverage: agg.coverage
@@ -3100,6 +3111,7 @@
          * 
          * Note: applyingChanges flag prevents input events from resetting clearedSession
          */
+        hasLiveSession = true;
         applyingChanges = true;
         suppressFor(1000);
         // Only the top document's own changes are reapplied here. Sub-frame rows

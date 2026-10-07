@@ -59,7 +59,7 @@ const html = fs.readFileSync(path.join(ROOT, 'panel/panel.html'), 'utf8');
 const ensureSrc = fs.readFileSync(path.join(ROOT, 'ensure-content-script.js'), 'utf8');
 
 console.log('\nclassic service worker (no module fetch)');
-check('manifest version is 0.4.4', manifest.version === '0.4.4', `version=${manifest.version}`);
+check('manifest version is 0.4.5', manifest.version === '0.4.5', `version=${manifest.version}`);
 check('background.service_worker is background.js',
   manifest.background && manifest.background.service_worker === 'background.js');
 check('background has no type: module',
