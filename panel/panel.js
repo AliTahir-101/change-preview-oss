@@ -8,6 +8,7 @@ import { ensureContentScript } from '../ensure-content-script.js';
 const elements = {
   // Main panel elements
   mainPanel: document.getElementById('mainPanel'),
+  trackingStatus: document.getElementById('trackingStatus'),
   hostInfo: document.getElementById('hostInfo'),
   changeCount: document.getElementById('changeCount'),
   coverage: document.getElementById('coverage'),
@@ -289,12 +290,19 @@ function isBenignConnectionError(err) {
 
 /**
  * Inject the content script if needed, then message that tab.
- * Until the user opens ChangePreview on the page, there is no content script;
- * ensure() fails soft on restricted URLs and missing activeTab.
+ * Page-load scripts normally already exist. This is a fallback for pages open
+ * during an extension update; ensure() fails soft if Chrome denies access.
  */
 async function sendToTab(tabId, message, tabUrl) {
-  await ensureContentScript(tabId, tabUrl);
-  return chrome.tabs.sendMessage(tabId, message);
+  const ready = await ensureContentScript(tabId, tabUrl);
+  if (!ready) {
+    if (elements.trackingStatus) elements.trackingStatus.textContent =
+      'Tracking is not active. Allow ChangePreview access to this site in Chrome, then refresh the page. Browser pages cannot be read.';
+    throw new Error('Could not establish connection: tracking is not active');
+  }
+  const response = await chrome.tabs.sendMessage(tabId, message, { frameId: 0 });
+  if (elements.trackingStatus) elements.trackingStatus.textContent = 'Tracking this page automatically.';
+  return response;
 }
 
 /**
@@ -510,7 +518,7 @@ function updateUI(data) {
   currentData = data;
   
   elements.hostInfo.textContent = data.host || '—';
-  elements.hostInfo.title = `${data.host}${data.path}`;
+  elements.hostInfo.dataset.tooltip = data.url || (data.host && data.host !== '—' ? `${data.host}${data.path || ''}` : 'No page available');
   
   const count = data.dirty?.length || 0;
   elements.changeCount.textContent = `${count} change${count === 1 ? '' : 's'}`;
@@ -543,17 +551,19 @@ function updateUI(data) {
     for (const field of data.dirty) {
       rowNum++;
       const row = document.createElement('tr');
-      // Whole-row click locates (scrolls to + highlights) the field on the page.
-      // Copyable spans/buttons stopPropagation so copying never also triggers it.
+      // Explicit controls keep text selection separate from actions.
       row.className = 'change-row';
       row.dataset.key = field.key;
-      row.title = 'Click to find this field on the page';
-      row.addEventListener('click', () => locateField(field.key, row));
+
       
       const numCell = document.createElement('td');
       numCell.className = 'row-number-cell';
-      const numSpan = document.createElement('span');
-      numSpan.className = 'row-number';
+      const numSpan = document.createElement('button');
+      numSpan.className = 'row-number locate-btn';
+      numSpan.type = 'button';
+      numSpan.dataset.tooltip = 'Find this field on the page';
+      numSpan.setAttribute('aria-label', `Find ${field.label} on the page`);
+      numSpan.addEventListener('click', () => locateField(field.key, row));
       numSpan.textContent = rowNum;
       numCell.appendChild(numSpan);
       
@@ -562,14 +572,20 @@ function updateUI(data) {
       labelWrapper.className = 'field-label-wrapper';
       
       const labelSpan = document.createElement('span');
-      labelSpan.className = 'field-label field-label-copyable';
+      labelSpan.className = 'field-label';
       labelSpan.textContent = field.label;
-      labelSpan.title = 'Click to copy field name';
-      labelSpan.addEventListener('click', (e) => { e.stopPropagation(); copyValue(field.label, 'Field name'); });
       labelWrapper.appendChild(labelSpan);
       
       const typeIcon = createTypeInfoIcon(field.type);
       labelWrapper.appendChild(typeIcon);
+      const labelCopy = document.createElement('button');
+      labelCopy.className = 'value-action-btn copy-btn';
+      labelCopy.type = 'button';
+      labelCopy.dataset.tooltip = 'Copy field name';
+      labelCopy.setAttribute('aria-label', 'Copy field name');
+      labelCopy.innerHTML = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none">${COPY_ICON_SVG}</svg>`;
+      labelCopy.addEventListener('click', () => copyValue(field.label, 'Field name'));
+      labelWrapper.appendChild(labelCopy);
       
       labelCell.appendChild(labelWrapper);
       
@@ -624,7 +640,8 @@ function createValueCell(value, className, copyLabel) {
   
   const copyBtn = document.createElement('button');
   copyBtn.className = 'value-action-btn copy-btn';
-  copyBtn.title = `Copy ${copyLabel.toLowerCase()}`;
+  copyBtn.dataset.tooltip = `Copy ${copyLabel.toLowerCase()}`;
+  copyBtn.setAttribute('aria-label', `Copy ${copyLabel.toLowerCase()}`);
   copyBtn.innerHTML = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none">${COPY_ICON_SVG}</svg>`;
   copyBtn.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -635,7 +652,6 @@ function createValueCell(value, className, copyLabel) {
   wrapper.appendChild(actionsWrapper);
   cell.appendChild(wrapper);
   
-  valueSpan.addEventListener('click', (e) => { e.stopPropagation(); copyValue(value, copyLabel); });
   
   return cell;
 }
@@ -812,10 +828,11 @@ async function refreshData(explicitTabId) {
         }
       }
       
+      // Live edits establish a session even when storage is disabled.
+      // Enabling Keep later must not reinterpret them as a recovered snapshot.
+      if (liveHasChanges) justReloaded = false;
+
       if (persistEnabled && liveHasChanges) {
-        // Real live changes detected - this is a new edit session
-        // Mark that we've seen live changes, so we don't restore from persisted later
-        justReloaded = false;
         
         if (pageCleared || panelClearedSession) {
           // First real edit after Clear - remove the marker, allow saving
@@ -1103,6 +1120,9 @@ async function loadPersistSetting() {
 }
 
 async function savePersistSetting(enabled) {
+  // Changing a preference is not a navigation. Establish this before storage
+  // writes can race with a polling refresh or a content-script scan.
+  if (enabled && !persistEnabled) justReloaded = false;
   try {
     await chrome.storage.local.set({ persistEnabled: enabled });
     persistEnabled = enabled;
@@ -1116,6 +1136,9 @@ async function savePersistSetting(enabled) {
         try {
           const response = await sendToTab(tab.id, { type: 'GET_FIELDS' }, tab.url);
           if (response?.dirty?.length > 0) {
+            justReloaded = false;
+            endKeepRestore();
+            updateReapplyVisibility();
             const fieldKeys = (response.dirty || []).map(f => f.key);
             const allFieldKeys = response.allFieldKeys || fieldKeys;
             const pageKey = getPageKey(response);
@@ -1488,12 +1511,13 @@ chrome.runtime.onMessage.addListener(async (message, sender) => {
 chrome.tabs.onActivated.addListener(async (activeInfo) => {
   // Rebind the panel to the newly active tab BEFORE anything else so late pushes
   // from the previous tab are rejected by the FIELDS_UPDATE guard immediately.
+  const tabChanged = activeTabId !== activeInfo.tabId;
   activeTabId = activeInfo.tabId;
   if (restoredKeep && restoredKeep.tabId !== activeInfo.tabId) {
     endKeepRestore();
   }
-  // New tab activated - treat as a fresh session for Reapply logic
-  justReloaded = true;
+  // Re-activation of this tab is not a document reload.
+  if (tabChanged) justReloaded = true;
   // Bind to the exact activated tab (not a currentWindow query) so the host +
   // detections switch to it immediately.
   await refreshData(activeInfo.tabId);
@@ -1509,11 +1533,14 @@ if (chrome.windows?.onFocusChanged) {
     try {
       const [tab] = await chrome.tabs.query({ active: true, windowId });
       if (!tab?.id) return;
+      const tabChanged = activeTabId !== tab.id;
       activeTabId = tab.id;
       if (restoredKeep && restoredKeep.tabId !== tab.id) {
         endKeepRestore();
       }
-      justReloaded = true;
+      // Save dialogs and other apps can return focus to the same live form.
+      // Preserve its edit session; only a different tab needs a fresh binding.
+      if (tabChanged) justReloaded = true;
       await refreshData(tab.id);
       await updateReapplyVisibility();
     } catch {}
@@ -1587,3 +1614,55 @@ if (typeof window !== 'undefined' && window.__CHANGEPREVIEW_TEST__) {
   init();
   setInterval(refreshData, 2000);
 }
+
+// Tooltips also work with keyboard focus and can be dismissed without toggling.
+const headerToggles = document.querySelector('.header-toggles');
+if (headerToggles) {
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') headerToggles.classList.add('tooltips-dismissed');
+  });
+  headerToggles.addEventListener('pointerleave', () => {
+    headerToggles.classList.remove('tooltips-dismissed');
+  });
+  headerToggles.addEventListener('focusin', () => {
+    headerToggles.classList.remove('tooltips-dismissed');
+  });
+}
+
+// Fixed positioning keeps field/choice help above rows and outside scroll clipping.
+const fieldTooltip = document.createElement('div');
+fieldTooltip.className = 'panel-tooltip';
+fieldTooltip.id = 'fieldTooltip';
+fieldTooltip.setAttribute('role', 'tooltip');
+fieldTooltip.hidden = true;
+document.body.appendChild(fieldTooltip);
+let tooltipTarget = null;
+function hideFieldTooltip() {
+  fieldTooltip.hidden = true;
+  tooltipTarget?.removeAttribute('aria-describedby');
+  tooltipTarget = null;
+}
+function showFieldTooltip(event) {
+  const target = event.target.closest?.('[data-tooltip]');
+  if (!target) { hideFieldTooltip(); return; }
+  hideFieldTooltip();
+  tooltipTarget = target;
+  fieldTooltip.textContent = target.dataset.tooltip;
+  target.setAttribute('aria-describedby', 'fieldTooltip');
+  fieldTooltip.hidden = false;
+  const rect = target.getBoundingClientRect();
+  const box = fieldTooltip.getBoundingClientRect();
+  fieldTooltip.style.left = Math.max(8, Math.min(rect.left, window.innerWidth - box.width - 8)) + 'px';
+  fieldTooltip.style.top = Math.max(8, rect.top - box.height - 8) + 'px';
+}
+document.addEventListener('pointerover', showFieldTooltip);
+document.addEventListener('focusin', showFieldTooltip);
+document.addEventListener('pointerout', (event) => {
+  if (!(event.relatedTarget instanceof window.Node) || !tooltipTarget?.contains(event.relatedTarget)) hideFieldTooltip();
+});
+document.addEventListener('focusout', hideFieldTooltip);
+document.addEventListener('scroll', hideFieldTooltip, true);
+window.addEventListener('resize', hideFieldTooltip);
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') hideFieldTooltip();
+});

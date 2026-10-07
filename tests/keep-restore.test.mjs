@@ -35,6 +35,7 @@ function check(name, cond, detail) {
 
 const store = {};
 let fieldsListener = null;
+let focusListener, activatedListener, updatedListener;
 const TAB = { id: 42, url: 'https://agentreshta.example/member/profile/preferences', windowId: 1 };
 let getFieldsResponse = {
   host: 'agentreshta.example',
@@ -54,12 +55,14 @@ const chromeStub = {
     query() { return Promise.resolve([TAB]); },
     get(id) { return Promise.resolve(id === TAB.id ? TAB : null); },
     sendMessage(tabId, msg) {
+      if (msg?.type === 'PING') return Promise.resolve({ ok: true });
       if (msg && msg.type === 'GET_FIELDS') return Promise.resolve(getFieldsResponse);
       return Promise.resolve({ success: true });
     },
-    onActivated: { addListener() {} },
-    onUpdated: { addListener() {} }
+    onActivated: { addListener(fn) { activatedListener = fn; } },
+    onUpdated: { addListener(fn) { updatedListener = fn; } }
   },
+  windows: { WINDOW_ID_NONE: -1, onFocusChanged: { addListener(fn) { focusListener = fn; } } },
   storage: {
     local: {
       get(keys) {
@@ -290,6 +293,50 @@ console.log('\nKeep restore survives post-reload scan/hydration (no flash-then-c
 }
 
 /* ------------------------------------------------------------------ */
+{
+  getFieldsResponse = {
+    host: 'agentreshta.example', path: '/member/profile/preferences', url: TAB.url,
+    dirty: [{ key: 'name:tz', label: 'Timezone', was: 'UTC', now: 'PT', type: 'select' }],
+    allFieldKeys: ['name:tz'], coverage: { tracked: 1, total: 1, skipped: 0 }
+  };
+  I.setJustReloaded(false);
+  await I.refreshData(TAB.id);
+  const reapply = document.getElementById('reapplyRow');
+  // Opening the panel with existing edits while Keep is off is a live session.
+  I.setPersistEnabled(false);
+  I.setJustReloaded(true);
+  await I.refreshData(TAB.id);
+  const keepToggle = document.getElementById('persistToggle');
+  const confirmToggle = document.getElementById('confirmToggle');
+  const settle = () => new Promise(resolve => setTimeout(resolve, 10));
+  for (const enabled of [true, false, true]) {
+    keepToggle.checked = enabled;
+    keepToggle.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+    await settle();
+    await I.refreshData(TAB.id);
+    check('Keep setting ' + enabled + ' preserves the live session', !I.isShowingRestored() && reapply.classList.contains('hidden'));
+    confirmToggle.checked = !confirmToggle.checked;
+    confirmToggle.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+    await settle();
+    await I.refreshData(TAB.id);
+    check('Confirm setting does not offer Reapply for live edits', !I.isShowingRestored() && reapply.classList.contains('hidden'));
+  }
+  const downloads = [];
+  dom.window.HTMLAnchorElement.prototype.click = function () { downloads.push(this.download); };
+  for (const id of ['downloadCsv', 'downloadMarkdown']) {
+    document.getElementById(id).click();
+    await focusListener(-1);
+    await focusListener(TAB.windowId);
+    check(id + ' focus return keeps live changes without Reapply', !I.isShowingRestored() && reapply.classList.contains('hidden'));
+  }
+  check('both exports create downloads', downloads.length === 2 && downloads[0].endsWith('.csv') && downloads[1].endsWith('.md'));
+  await activatedListener({ tabId: TAB.id });
+  check('same-tab activation does not trigger restore', !I.isShowingRestored() && reapply.classList.contains('hidden'));
+  await updatedListener(TAB.id, { status: 'loading' });
+  getFieldsResponse = { ...getFieldsResponse, dirty: [] };
+  await updatedListener(TAB.id, { status: 'complete' });
+  check('actual reload still offers saved changes', I.isShowingRestored() && !reapply.classList.contains('hidden'));
+}
 console.log('');
 if (failed === 0) {
   console.log(`All ${passed} checks passed.`);

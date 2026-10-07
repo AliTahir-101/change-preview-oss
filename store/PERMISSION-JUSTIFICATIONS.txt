@@ -1,0 +1,31 @@
+ChangePreview 0.4.4 - CWS Privacy tab
+
+SINGLE PURPOSE
+Help users review and export changes to web forms before saving, with automatic local comparison of original and edited values.
+
+HOST / WEBSITE ACCESS JUSTIFICATION
+ChangePreview captures original form values when an HTTP or HTTPS page loads so it can compare later edits and show a local Was/Now review before Save/Submit. Requiring a toolbar click first would miss changes made during normal browsing. Forms can appear on arbitrary websites and in frames, so static content-script matches cover http://*/* and https://*/*. Chrome site-access controls let users limit access to chosen sites. Recognized sensitive fields are excluded. No form values are transmitted to the developer or third parties.
+
+activeTab
+Provides temporary access after an explicit toolbar click for fallback initialization on a page already open during installation or an update. Normal tracking starts automatically through the declared content scripts where site access is granted.
+
+scripting
+Injects the packaged content/content.js only as a fallback when a permitted page has no tracker, such as an already-open tab after an update. A readiness check prevents resetting an existing tracker.
+
+storage
+Stores user preferences and, when Keep after reload is enabled, change snapshots locally for review and reapplication. Session storage also holds temporary extension state.
+
+sidePanel
+Shows the local Field / Was / Now review, coverage, Keep/Reapply, Clear, and export controls beside the current page.
+
+REMOTE CODE
+No, I am not using remote code. Executable code is included in the extension package.
+
+DATA HANDLING
+The extension reads form contents and page identity locally for comparisons. Opted-in saved changes and preferences stay in Chrome storage. It does not transmit form values to the developer or third parties, sell data, use analytics, or require accounts. Do not describe it as accessing no data: local form processing and optional storage still occur. Complete the dashboard's data-use questions against their displayed definitions and the published privacy policy.
+
+PRIVACY POLICY
+https://nextgenfolks.com/privacy
+
+IMPORTANT
+The automatic content-script match patterns request broad website access even though there is no separate host_permissions key. Replace old activeTab-only or leave-host-justification-blank copy. The corrected 0.4.4 privacy policy is live (verified 8 October 2026).

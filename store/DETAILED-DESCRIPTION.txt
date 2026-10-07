@@ -1,0 +1,34 @@
+Changed several fields and lost track of what you edited?
+
+ChangePreview gives you a second look before you save. It shows the original value next to your new value, so you can review changes without searching through a long form or trying to remember what was there before.
+
+Useful when you are:
+- Entering or checking information in application forms.
+- Updating customer contact details or support records.
+- Changing order details or admin settings.
+- Testing a form and recording what you changed.
+
+Work normally. Review when you are ready.
+On websites you allow, ChangePreview starts when the page loads. You do not need to click the extension icon before making edits. Open the side panel whenever you want to see your change list. With Confirm on save enabled, supported Save/Submit actions also show a review dialog.
+
+What you can do:
+- Compare old and new values in a clear Was / Now table.
+- Click the numbered button beside a change to find and highlight its field on the page. Copy field names and values with their copy buttons.
+- Turn on Keep after reload to save edits locally, then use Reapply my changes on compatible forms after a refresh.
+- Clear the current page's change list to start a fresh comparison.
+- Copy or download changes as Markdown or CSV for a support ticket, spreadsheet, or handover.
+
+Getting started:
+1. Allow site access in Chrome. Choose all sites or only the sites you use.
+2. Load or refresh your form page, then make your edits.
+3. Open ChangePreview to review them before saving.
+
+Free, with your form data kept on your device.
+No account, subscription, license key, or in-app purchase is required. Form values are processed locally, with no uploads or analytics. Keep after reload stores saved changes in your browser. Website access is needed to capture original values before you edit them; you control that access in Chrome.
+
+Works with many standard web forms.
+Some custom controls, restricted browser pages, closed Shadow DOM, and frames without site access cannot be read. Save confirmation does not work with every custom submission flow. Changes made before tracking started cannot be reconstructed. Password fields and fields recognized as sensitive are skipped, but sensitive information in a general text field may not be recognized. Always review important edits before submitting.
+
+Built by NextGen Folks.
+Support: info@nextgenfolks.com
+Privacy: https://nextgenfolks.com/privacy

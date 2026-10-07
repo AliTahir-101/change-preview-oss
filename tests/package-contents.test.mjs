@@ -59,7 +59,7 @@ const html = fs.readFileSync(path.join(ROOT, 'panel/panel.html'), 'utf8');
 const ensureSrc = fs.readFileSync(path.join(ROOT, 'ensure-content-script.js'), 'utf8');
 
 console.log('\nclassic service worker (no module fetch)');
-check('manifest version is 0.4.2', manifest.version === '0.4.2', `version=${manifest.version}`);
+check('manifest version is 0.4.4', manifest.version === '0.4.4', `version=${manifest.version}`);
 check('background.service_worker is background.js',
   manifest.background && manifest.background.service_worker === 'background.js');
 check('background has no type: module',
@@ -69,7 +69,7 @@ check('background.js has no static import',
 check('background.js inlines ensureContentScript',
   /function ensureContentScript\s*\(/.test(bg));
 check('no host_permissions', !manifest.host_permissions);
-check('no content_scripts', !manifest.content_scripts);
+check('automatic scripts run on web pages', JSON.stringify(manifest.content_scripts?.[0]) === JSON.stringify({ matches: ['http://*/*', 'https://*/*'], js: ['content/content.js'], run_at: 'document_idle', all_frames: true }));
 check('permissions are activeTab+scripting+storage+sidePanel',
   JSON.stringify(manifest.permissions) === JSON.stringify(['activeTab', 'scripting', 'storage', 'sidePanel']));
 

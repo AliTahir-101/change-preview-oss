@@ -1,0 +1,14 @@
+ChangePreview 0.4.4 reviewer test
+
+No account, payment, or license key is required.
+1. Install the extension and allow site access on the test site.
+2. Navigate to a standard HTML form, or refresh it if it was open before installation. Example: https://hakemus.tampuuri.fi/JVA/?hakemustyyppi=1
+3. Leave the ChangePreview panel closed. Change an ordinary, non-sensitive field; on the example form, enter a dummy value in Min m2 or change an area checkbox. Do not submit an actual housing application.
+4. Open ChangePreview. The Was/Now table should already contain the edit, and the badge should reflect detected changes.
+5. Clear detections, then edit again. New changes should appear from the cleared baseline.
+6. On a disposable test form with a normal Save/Submit control, enable Confirm on save and verify that the review dialog appears with pending edits. Cancel it. Do not submit real records.
+7. Enable Keep after reload. Existing edits should remain live without showing Reapply. Toggle Confirm on save and download CSV or Markdown; these actions must not offer Reapply.
+8. Refresh the form, review the saved changes, and try Reapply on a compatible form.
+9. Use a numbered row button to find a field on the page. Copy buttons copy field names and values; clicking the text does not copy it. Hover or focus the page reference to see its full URL.
+
+Automatic tracking operates on HTTP/HTTPS pages where Chrome grants site access. Browser-internal pages and some custom form controls are unsupported. Original values from edits made before installation or before access was granted cannot be reconstructed.

@@ -12,17 +12,9 @@
       <div class="header-row">
         <div class="header-main">
           <h1 class="title">ChangePreview</h1>
-          <div class="host" id="hostInfo">—</div>
-        </div>
-        <div class="header-toggles">
-          <label class="header-toggle" title="Show a confirmation dialog listing changes when you save or submit a form">
-            <input type="checkbox" id="confirmToggle" checked>
-            <span class="header-toggle-label">Confirm on save</span>
-          </label>
-          <label class="header-toggle persist-toggle" title="Keep detections after reload">
-            <input type="checkbox" id="persistToggle">
-            <span class="header-toggle-label persist-label">Keep after reload</span>
-          </label>
+          <p id="trackingStatus" class="tracking-status" role="status">Checking automatic tracking…</p>
+          <p class="local-note">Your form data stays on this device</p>
+          <div class="page-reference"><span class="page-reference-label">PAGE</span><span class="host" id="hostInfo" tabindex="0" aria-label="Current page">—</span></div>
         </div>
       </div>
       <div class="header-meta">
@@ -32,6 +24,18 @@
           <span id="coverageText">—</span>
         </span>
       </div>
+        <div class="header-toggles">
+          <label class="header-toggle">
+            <input type="checkbox" id="confirmToggle" aria-describedby="confirmTooltip" checked>
+            <span class="header-toggle-label">Confirm on save</span>
+            <span class="toggle-tooltip" id="confirmTooltip" role="tooltip">Review changes before supported Save or Submit actions.</span>
+          </label>
+          <label class="header-toggle persist-toggle">
+            <input type="checkbox" id="persistToggle" aria-describedby="persistTooltip">
+            <span class="header-toggle-label persist-label">Keep after reload</span>
+            <span class="toggle-tooltip" id="persistTooltip" role="tooltip">Save changes on this device to review or reapply after a refresh.</span>
+          </label>
+        </div>
     </header>
 
     <main class="main">

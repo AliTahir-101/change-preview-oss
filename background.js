@@ -24,8 +24,8 @@ function isRestrictedTabUrl(url) {
 
 async function pingContentScript(tabId) {
   try {
-    await chrome.tabs.sendMessage(tabId, { type: 'PING' });
-    return true;
+    const response = await chrome.tabs.sendMessage(tabId, { type: 'PING' }, { frameId: 0 });
+    return response?.ok === true;
   } catch {
     return false;
   }
@@ -33,11 +33,21 @@ async function pingContentScript(tabId) {
 
 async function injectContentScript(tabId) {
   if (!chrome.scripting?.executeScript) return false;
-  await chrome.scripting.executeScript({
-    target: { tabId: tabId, allFrames: true },
-    files: [CONTENT_SCRIPT_FILE],
-    injectImmediately: true
-  });
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId, allFrames: true },
+      files: [CONTENT_SCRIPT_FILE],
+      injectImmediately: true
+    });
+  } catch {
+    // An inaccessible child frame must not prevent tracking the main form.
+    // Chrome still enforces activeTab on this fallback; no access is broadened.
+    await chrome.scripting.executeScript({
+      target: { tabId, frameIds: [0] },
+      files: [CONTENT_SCRIPT_FILE],
+      injectImmediately: true
+    });
+  }
   return true;
 }
 
@@ -100,16 +110,15 @@ function updateBadge(tabId, count) {
   chrome.action.setTitle({ title, tabId }).catch(() => {});
 }
 
-chrome.action.onClicked.addListener(async (tab) => {
-  // User gesture: activeTab is granted for this page. Inject before / as the
-  // panel opens so the first GET_FIELDS has a receiving end. With
-  // openPanelOnActionClick this listener may not fire; the panel also ensures.
-  if (tab?.id != null) {
-    await ensureContentScript(tab.id, tab.url);
-  }
+chrome.action.onClicked.addListener((tab) => {
+  // Open synchronously while the toolbar click's user gesture is active.
+  // Automatic side-panel handling can consume the click without this event.
   if (tab?.windowId != null) {
-    await chrome.sidePanel.open({ windowId: tab.windowId }).catch(() => {});
+    chrome.sidePanel.open({ windowId: tab.windowId }).catch(console.warn);
+  }
+  if (tab?.id != null) {
+    void ensureContentScript(tab.id, tab.url);
   }
 });
 
-chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
+chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false }).catch(console.warn);

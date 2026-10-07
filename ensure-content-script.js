@@ -8,10 +8,9 @@
  * background.js is a classic (non-module) service worker and inlines the same
  * helpers — it must NOT import this file. Keep the two copies in sync.
  *
- * ChangePreview does not declare host_permissions or a static content_scripts
- * match pattern. The content script is injected only after the user opens the
- * extension on a page. Subsequent messages reuse the injected script until the
- * tab navigates (activeTab is then revoked; the user opens ChangePreview again).
+ * Automatic content scripts capture page-load baselines on permitted HTTP(S)
+ * pages. This helper is a toolbar/panel fallback for pages already open during
+ * an extension update; it never re-baselines an existing tracker.
  */
 
 const CONTENT_SCRIPT_FILE = 'content/content.js';
@@ -31,10 +30,9 @@ export function isRestrictedTabUrl(url) {
 
 async function pingContentScript(tabId) {
   try {
-    // Any response means a listener is present. PING is handled by the top frame;
-    // unknown types on an older build still prove the script is already there.
-    await chrome.tabs.sendMessage(tabId, { type: 'PING' });
-    return true;
+    // Require the top-frame readiness response, not a reply from a child frame.
+    const response = await chrome.tabs.sendMessage(tabId, { type: 'PING' }, { frameId: 0 });
+    return response?.ok === true;
   } catch {
     return false;
   }
@@ -42,11 +40,21 @@ async function pingContentScript(tabId) {
 
 async function injectContentScript(tabId) {
   if (!chrome.scripting?.executeScript) return false;
-  await chrome.scripting.executeScript({
-    target: { tabId, allFrames: true },
-    files: [CONTENT_SCRIPT_FILE],
-    injectImmediately: true
-  });
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId, allFrames: true },
+      files: [CONTENT_SCRIPT_FILE],
+      injectImmediately: true
+    });
+  } catch {
+    // An inaccessible child frame must not prevent tracking the main form.
+    // Chrome still enforces activeTab on this fallback; no access is broadened.
+    await chrome.scripting.executeScript({
+      target: { tabId, frameIds: [0] },
+      files: [CONTENT_SCRIPT_FILE],
+      injectImmediately: true
+    });
+  }
   return true;
 }
 

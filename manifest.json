@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "ChangePreview",
-  "version": "0.4.2",
-  "description": "See form changes before you save: compare Was vs Now, export to Markdown or CSV, keep edits locally. Private, nothing uploaded.",
+  "version": "0.4.4",
+  "description": "Review form changes before you save. Compare old and new values, recover saved edits after a refresh, and export your changes.",
   "permissions": [
     "activeTab",
     "scripting",
@@ -37,5 +37,18 @@
       },
       "description": "Open ChangePreview panel"
     }
-  }
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ],
+      "js": [
+        "content/content.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ]
 }
