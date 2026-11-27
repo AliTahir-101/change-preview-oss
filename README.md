@@ -115,7 +115,7 @@ For bugs and feature ideas, please open an issue with steps to reproduce or a sh
 
 ## License
 
-Released under the MIT License. A copy of the full license text should accompany the source before any public release.
+Released under the MIT License. See [LICENSE](LICENSE) for the full text.
 
 ## About NextGen Folks
 
