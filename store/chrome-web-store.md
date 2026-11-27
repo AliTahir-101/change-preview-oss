@@ -155,7 +155,7 @@ That copies the complete package to `dist/extension` (ready to zip or to point
 Load unpacked at). Confirm `ensure-content-script.js` sits next to `background.js`
 in the staged tree before zipping.
 
-Do not include `tests/`, `fixtures/`, `worker/`, `node_modules/`, or docs in the
+Do not include `tests/`, `fixtures/`, `node_modules/`, or docs in the
 store zip.
 
 Support / feedback contact: info@nextgenfolks.com

@@ -11,7 +11,7 @@
  *   npm run stage
  *
  * Default dest: dist/extension
- * Omit tests/, fixtures/, worker/, docs, node_modules.
+ * Omit tests/, fixtures/, docs, node_modules.
  */
 
 import fs from 'node:fs';

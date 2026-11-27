@@ -193,8 +193,6 @@ This is a Manifest V3 Chrome extension. The structure is:
 
 ChangePreview is fully free. There is no payment, license key, unlock screen, or in-app purchase. Keep after reload, Reapply, Clear, export, click-to-highlight, and Confirm on save all work as soon as you load the extension.
 
-The `worker/` directory is **legacy / unused**. It is leftover Stripe + Cloudflare Worker license-API code kept as archived reference. The shipped extension does not call it.
-
 ## License
 
 MIT
